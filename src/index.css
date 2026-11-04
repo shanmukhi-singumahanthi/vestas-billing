@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #f1f5f9;
+    color: #0f172a;
+  }
+}
+
+/* Rich Pharmaceutical Workspace Backdrop */
+.pharma-app-bg {
+  background-color: #f0f6fa;
+  background-image:
+    radial-gradient(at 0% 0%, rgba(2, 132, 199, 0.09) 0px, transparent 48%),
+    radial-gradient(at 100% 0%, rgba(16, 185, 129, 0.08) 0px, transparent 48%),
+    radial-gradient(at 50% 100%, rgba(14, 165, 233, 0.06) 0px, transparent 55%),
+    radial-gradient(#cbd5e1 0.75px, transparent 0.75px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 24px 24px;
+}
+
+.pharma-login-bg {
+  background-color: #0f172a;
+  background-image:
+    radial-gradient(at 15% 15%, rgba(2, 132, 199, 0.28) 0px, transparent 50%),
+    radial-gradient(at 85% 20%, rgba(16, 185, 129, 0.22) 0px, transparent 50%),
+    radial-gradient(at 50% 85%, rgba(214, 59, 36, 0.14) 0px, transparent 55%),
+    radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 28px 28px;
+}
+
+/* Custom clean scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Dedicated Print Styles for Physical Printers (A4 & Thermal 80mm) */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  #printable-invoice-area,
+  #printable-invoice-area * {
+    visibility: visible !important;
+  }
+
+  #printable-invoice-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
