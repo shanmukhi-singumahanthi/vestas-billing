@@ -74,7 +74,7 @@ app.post('/api/catalog/reset-official', async (req, res) => {
     await resetToOfficialVestasCatalog(db);
     res.json({
       success: true,
-      message: 'Vestas Pharmaceuticals official catalog (items 15-27) loaded successfully. All old dummy data wiped.',
+      message: 'All 27 official Vestas Pharmaceuticals products (items 1-27) loaded successfully. All old dummy invoices, customer dues, and reports wiped clean.',
     });
   } catch (err) {
     console.error('Catalog reset error:', err);

@@ -15,6 +15,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { apiRequest } from '../utils/api';
+import { idbReplaceAll } from '../utils/offlineDb';
 import {
   formatCurrency,
   exportToExcel,
@@ -230,7 +231,7 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
   const handleResetOfficialCatalog = async () => {
     if (
       !window.confirm(
-        'Are you sure you want to reload the official Vestas Pharmaceuticals price list (items 15-27)? All dummy data will be removed and replaced with authentic Vestas products.'
+        'Are you sure you want to load all 27 official Vestas Pharmaceuticals products (items 1-27)? All dummy data, old invoices, customer dues, and financial reports will be completely wiped for a clean fresh start.'
       )
     ) {
       return;
@@ -239,9 +240,15 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
     setFeedback(null);
     try {
       const res = await apiRequest('/api/catalog/reset-official', { method: 'POST' });
+      try {
+        await idbReplaceAll('invoices', []);
+        await idbReplaceAll('customers', []);
+      } catch {
+        // non-blocking for browser offline storage
+      }
       setFeedback({
         type: 'success',
-        text: res.message || 'Official Vestas Pharmaceuticals catalog loaded successfully!',
+        text: res.message || 'All 27 official Vestas products loaded! Invoices and customer dues reset to zero.',
       });
       onRefresh();
     } catch (err) {

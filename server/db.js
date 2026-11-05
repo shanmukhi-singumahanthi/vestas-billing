@@ -320,74 +320,110 @@ async function initializeSchema(db) {
     );
   }
 
-  // Ensure default customers exist
-  const custCountRes = await db.query('SELECT COUNT(*) as count FROM customers');
-  if (Number(custCountRes.rows[0].count) === 0) {
-    const initialCustomers = [
-      ['Sri Durga Medicals', '9848122334', 'sridurgamedicals@gmail.com', 'Besant Road, Governorpet, Vijayawada', '37AABCS1429B1Z1', 'AP/VJA/20B/88210', 0, 14200],
-      ['Lakshmi Nursing Home Pharmacy', '9440199887', 'lakshminursing@gmail.com', 'Suryaraopet, Vijayawada', '37AADCL5512K1Z5', 'AP/VJA/20B/77412', 0, 28450],
-      ['Ramesh Hospitals Pharmacy', '9866411223', 'pharmacy@rameshhospitals.com', 'MG Road, Vijayawada', '37AAACR4411M1Z8', 'AP/VJA/20B/99104', 0, 46900],
-    ];
-    for (const c of initialCustomers) {
-      await db.query(
-        `INSERT INTO customers (name, phone, email, address, gstin, dl_number, balance, total_purchases)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        c
-      );
-    }
-  }
+  // Clean state: ensure no dummy customers exist
+  // Customers will be added directly by the owner for real clients/chemists
 
-  // Check if we need to remove all old dummy medicines and load the official Vestas Pharmaceuticals catalog
-  const checkRealVestas = await db.query(
-    "SELECT id FROM products WHERE name IN ('TELVEST-40', 'Esvod-20', 'THIOFLEX 8', 'ZOLID-600')"
+  // Ensure the full 27 official Vestas catalog is loaded, and dummy invoices/customers are eliminated
+  const vestasCheck = await db.query(
+    "SELECT COUNT(*) as count FROM products WHERE name IN ('BONEHEAL-D3', 'CAPIDOL', 'CEFSTAS inj', 'MOXIVEST-CV')"
   );
-  if (checkRealVestas.rows.length === 0) {
+  const invCheck = await db.query("SELECT COUNT(*) as count FROM invoices");
+  const custCheck = await db.query("SELECT COUNT(*) as count FROM customers");
+
+  if (
+    Number(vestasCheck.rows[0].count) < 4 ||
+    Number(invCheck.rows[0].count) > 0 ||
+    Number(custCheck.rows[0].count) > 0
+  ) {
     await resetToOfficialVestasCatalog(db);
   }
 }
 
 /**
- * Completely resets and replaces all medicines and sample invoices with the official Vestas Pharmaceuticals price list
+ * Completely resets and replaces all medicines with the complete 27 official Vestas Pharmaceuticals products.
+ * Completely cleans all invoice data, customer & dues data, and resets financial analytics to a fresh start.
  */
 export async function resetToOfficialVestasCatalog(db) {
   await db.transaction(async (tx) => {
-    // 1. Delete all old dummy invoices, items, and products
+    // 1. Delete all invoices, items, customer payments, customers, and old products
     await tx.exec(`
       DELETE FROM invoice_items;
       DELETE FROM customer_payments;
       DELETE FROM stock_movements;
       DELETE FROM invoices;
+      DELETE FROM customers;
       DELETE FROM products;
     `);
 
     // Reset sequences safely
     await tx.exec(`
       SELECT setval('products_id_seq', 1, false);
+      SELECT setval('customers_id_seq', 1, false);
       SELECT setval('invoices_id_seq', 1, false);
       SELECT setval('invoice_items_id_seq', 1, false);
+      SELECT setval('customer_payments_id_seq', 1, false);
       SELECT setval('stock_movements_id_seq', 1, false);
     `);
 
-    // 2. Insert all 13 official products from the Vestas Pharmaceuticals price card (items 15 to 27)
-    // S.No | Medicine Name | MRP | Selling Rate | Purchase Rate | Pack Size
+    // 2. Insert all 27 official products from the Vestas Pharmaceuticals price cards (items 1 to 27)
+    // S.No | Product Name | MRP | Selling Rate (PTR) | Purchase Rate (PTS) | Pack Size
     const vestasProducts = [
-      // Name, SKU, Barcode, HSN, Category, Manufacturer, Batch, Expiry, Pack Size, Rack, Purchase, Selling, MRP, GST%, Stock, MinStock
-      ['Esvod-20', 'VP-ESV-20', '890123456015', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'ESV2401', '2027-12-31', '1*10', 'Rack A-1', 80.00, 89.00, 117.00, 12.00, 150, 20],
-      ['OSTEOCAL-K2', 'VP-OST-K2', '890123456016', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'OST2402', '2027-11-30', '1*10', 'Rack A-2', 146.00, 163.00, 215.00, 12.00, 120, 20],
-      ['PENSEN DSR', 'VP-PEN-DSR', '890123456017', '3004', 'Capsules', 'Vestas Pharmaceuticals', 'PDS2403', '2028-02-28', '1*10', 'Rack B-1', 103.00, 114.00, 150.00, 12.00, 180, 25],
-      ['RADO-D', 'VP-RAD-D', '890123456018', '3004', 'Capsules', 'Vestas Pharmaceuticals', 'RAD2404', '2027-10-31', '1*10', 'Rack B-2', 76.00, 84.00, 110.00, 12.00, 140, 20],
-      ['TELVEST-40', 'VP-TEL-40', '890123456019', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TLV2405', '2028-01-31', '1*10', 'Rack C-1', 59.00, 65.00, 85.00, 12.00, 220, 30],
-      ['THIOFLEX 8', 'VP-THF-8', '890123456020', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'THF2406', '2027-09-30', '1*10', 'Rack C-2', 188.00, 209.00, 275.00, 12.00, 110, 20],
-      ['THIOFLEX-A4', 'VP-THF-A4', '890123456021', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TFA2407', '2027-08-31', '1*10', 'Rack C-3', 127.00, 141.00, 185.00, 12.00, 130, 20],
-      ['THIOFLEX GEL', 'VP-THF-GEL', '890123456022', '3004', 'Ointments', 'Vestas Pharmaceuticals', 'THG2408', '2027-07-31', '30GM', 'Rack D-1', 161.00, 179.00, 235.00, 12.00, 95, 15],
-      ['TRACET', 'VP-TRC', '890123456023', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TRC2409', '2028-03-31', '1*10', 'Rack A-3', 123.00, 137.00, 180.00, 12.00, 160, 25],
-      ['TRIENZO', 'VP-TRZ', '890123456024', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TRZ2410', '2027-12-31', '1*10', 'Rack A-4', 154.00, 171.00, 225.00, 12.00, 140, 20],
-      ['TRIENZO-D', 'VP-TRZ-D', '890123456025', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TZD2411', '2027-11-30', '1*10', 'Rack A-5', 154.00, 171.00, 225.00, 12.00, 150, 20],
-      ['ZOLADIN-MR', 'VP-ZLD-MR', '890123456026', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'ZMR2412', '2028-04-30', '1*10', 'Rack B-3', 354.00, 394.00, 525.00, 12.00, 85, 15],
-      ['ZOLID-600', 'VP-ZLD-600', '890123456027', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'Z602413', '2028-05-31', '1*10', 'Rack B-4', 253.00, 281.00, 370.00, 12.00, 105, 20],
+      // S.No 1: BONEHEAL-D3
+      ['BONEHEAL-D3', 'VP-BNH-D3', '890123456001', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'BHD2401', '2028-06-30', '1*10', 'Rack A-1', 116.00, 129.00, 170.00, 12.00, 150, 20],
+      // S.No 2: CAPIDOL
+      ['CAPIDOL', 'VP-CPD', '890123456002', '3004', 'Ointments', 'Vestas Pharmaceuticals', 'CPD2402', '2027-12-31', '1*30GM', 'Rack D-1', 76.00, 84.00, 110.00, 12.00, 100, 15],
+      // S.No 3: CEFSTAS inj
+      ['CEFSTAS inj', 'VP-CFS-INJ', '890123456003', '3004', 'Injections', 'Vestas Pharmaceuticals', 'CFI2403', '2027-10-31', '1 VIAL', 'Rack E-1', 240.00, 267.00, 351.00, 12.00, 80, 15],
+      // S.No 4: D3 ELITE NANO
+      ['D3 ELITE NANO', 'VP-D3E-NNO', '890123456004', '3004', 'Drops', 'Vestas Pharmaceuticals', 'DEN2404', '2027-11-30', '1PACK', 'Rack A-2', 246.00, 274.00, 360.00, 12.00, 90, 15],
+      // S.No 5: EBONE-OA
+      ['EBONE-OA', 'VP-EBN-OA', '890123456005', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'EOA2405', '2028-03-31', '1*10', 'Rack A-3', 154.00, 171.00, 225.00, 12.00, 140, 20],
+      // S.No 6: EXEDOL-P
+      ['EXEDOL-P', 'VP-EXD-P', '890123456006', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'EDP2406', '2028-01-31', '1*10', 'Rack B-1', 58.00, 65.00, 85.00, 12.00, 200, 25],
+      // S.No 7: EXEDOL -SP
+      ['EXEDOL -SP', 'VP-EXD-SP', '890123456007', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'EDS2407', '2028-02-28', '1*10', 'Rack B-2', 100.00, 110.00, 145.00, 12.00, 180, 25],
+      // S.No 8: FLUPIKEM-P
+      ['FLUPIKEM-P', 'VP-FLP-P', '890123456008', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'FKP2408', '2027-09-30', '1*10', 'Rack B-3', 147.00, 163.00, 215.00, 12.00, 120, 20],
+      // S.No 9: HYLAGEN-G
+      ['HYLAGEN-G', 'VP-HLG-G', '890123456009', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'HLG2409', '2028-04-30', '1*10', 'Rack C-1', 274.00, 304.00, 400.00, 12.00, 80, 15],
+      // S.No 10: JOCERIN-GM
+      ['JOCERIN-GM', 'VP-JOC-GM', '890123456010', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'JGM2410', '2027-12-31', '1*10', 'Rack C-2', 144.00, 160.00, 210.00, 12.00, 110, 20],
+      // S.No 11: KETROVEST-DT
+      ['KETROVEST-DT', 'VP-KTV-DT', '890123456011', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'KDT2411', '2028-05-31', '1*10', 'Rack C-3', 85.00, 95.00, 125.00, 12.00, 150, 20],
+      // S.No 12: LORNICAN-(P)
+      ['LORNICAN-(P)', 'VP-LRN-P', '890123456012', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'LNP2412', '2027-11-30', '1*10', 'Rack C-4', 86.00, 95.00, 125.00, 12.00, 140, 20],
+      // S.No 13: MOXIVEST-CV
+      ['MOXIVEST-CV', 'VP-MXV-CV', '890123456013', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'MVC2413', '2028-06-30', '1*10', 'Rack A-4', 202.00, 224.00, 295.00, 12.00, 100, 20],
+      // S.No 14: NUROVEST-NT
+      ['NUROVEST-NT', 'VP-NRV-NT', '890123456014', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'NVT2414', '2028-04-30', '1*10', 'Rack A-5', 125.00, 139.00, 183.00, 12.00, 130, 20],
+      // S.No 15: Esvod-20
+      ['Esvod-20', 'VP-ESV-20', '890123456015', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'ESV2401', '2027-12-31', '1*10', 'Rack A-6', 80.00, 89.00, 117.00, 12.00, 150, 20],
+      // S.No 16: OSTEOCAL-K2
+      ['OSTEOCAL-K2', 'VP-OST-K2', '890123456016', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'OST2402', '2027-11-30', '1*10', 'Rack A-7', 146.00, 163.00, 215.00, 12.00, 120, 20],
+      // S.No 17: PENSEN DSR
+      ['PENSEN DSR', 'VP-PEN-DSR', '890123456017', '3004', 'Capsules', 'Vestas Pharmaceuticals', 'PDS2403', '2028-02-28', '1*10', 'Rack B-4', 103.00, 114.00, 150.00, 12.00, 180, 25],
+      // S.No 18: RADO-D
+      ['RADO-D', 'VP-RAD-D', '890123456018', '3004', 'Capsules', 'Vestas Pharmaceuticals', 'RAD2404', '2027-10-31', '1*10', 'Rack B-5', 76.00, 84.00, 110.00, 12.00, 140, 20],
+      // S.No 19: TELVEST-40
+      ['TELVEST-40', 'VP-TEL-40', '890123456019', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TLV2405', '2028-01-31', '1*10', 'Rack C-5', 59.00, 65.00, 85.00, 12.00, 220, 30],
+      // S.No 20: THIOFLEX 8
+      ['THIOFLEX 8', 'VP-THF-8', '890123456020', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'THF2406', '2027-09-30', '1*10', 'Rack C-6', 188.00, 209.00, 275.00, 12.00, 110, 20],
+      // S.No 21: THIOFLEX-A4
+      ['THIOFLEX-A4', 'VP-THF-A4', '890123456021', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TFA2407', '2027-08-31', '1*10', 'Rack C-7', 127.00, 141.00, 185.00, 12.00, 130, 20],
+      // S.No 22: THIOFLEX GEL
+      ['THIOFLEX GEL', 'VP-THF-GEL', '890123456022', '3004', 'Ointments', 'Vestas Pharmaceuticals', 'THG2408', '2027-07-31', '30GM', 'Rack D-2', 161.00, 179.00, 235.00, 12.00, 95, 15],
+      // S.No 23: TRACET
+      ['TRACET', 'VP-TRC', '890123456023', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TRC2409', '2028-03-31', '1*10', 'Rack A-8', 123.00, 137.00, 180.00, 12.00, 160, 25],
+      // S.No 24: TRIENZO
+      ['TRIENZO', 'VP-TRZ', '890123456024', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TRZ2410', '2027-12-31', '1*10', 'Rack A-9', 154.00, 171.00, 225.00, 12.00, 140, 20],
+      // S.No 25: TRIENZO-D
+      ['TRIENZO-D', 'VP-TRZ-D', '890123456025', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TZD2411', '2027-11-30', '1*10', 'Rack A-10', 154.00, 171.00, 225.00, 12.00, 150, 20],
+      // S.No 26: ZOLADIN-MR
+      ['ZOLADIN-MR', 'VP-ZLD-MR', '890123456026', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'ZMR2412', '2028-04-30', '1*10', 'Rack B-6', 354.00, 394.00, 525.00, 12.00, 85, 15],
+      // S.No 27: ZOLID-600
+      ['ZOLID-600', 'VP-ZLD-600', '890123456027', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'Z602413', '2028-05-31', '1*10', 'Rack B-7', 253.00, 281.00, 370.00, 12.00, 105, 20],
     ];
 
-    const prodIdMap = {};
     for (const p of vestasProducts) {
       const ins = await tx.query(
         `INSERT INTO products (
@@ -397,250 +433,17 @@ export async function resetToOfficialVestasCatalog(db) {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
         p
       );
-      prodIdMap[p[0]] = ins.rows[0].id;
 
       await tx.query(
         `INSERT INTO stock_movements (
           product_id, product_name, batch_number, movement_type, quantity_change,
           previous_stock, new_stock, unit_cost, reference_id, reason, performed_by
-        ) VALUES ($1,$2,$3,'OPENING_STOCK',$4,0,$4,$5,'INIT-STOCK','Initial Stock Entry - Vestas Price List','S. Satyendranath (Proprietor)')`,
+        ) VALUES ($1,$2,$3,'OPENING_STOCK',$4,0,$4,$5,'INIT-STOCK','Initial Stock Entry - Vestas Official Price List','S. Satyendranath (Proprietor)')`,
         [ins.rows[0].id, p[0], p[6], p[14], p[10]]
       );
     }
 
-    // 3. Update settings next_invoice_number to 1004
-    await tx.query("UPDATE settings SET next_invoice_number = 1004 WHERE id = 1");
-
-    // 4. Seed clean, realistic invoices using exclusively these Vestas products across 2024, 2025, 2026
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = now.getMonth();
-
-    const makeIso = (year, monthIndex, day, hour = 11, min = 30) => {
-      const dt = new Date(year, monthIndex, day, hour, min, 0);
-      return dt.toISOString();
-    };
-
-    const historicalInvoices = [
-      {
-        invoice_number: 'VP-2024-001',
-        customer_name: 'Sri Durga Medicals',
-        customer_phone: '9848122334',
-        customer_gstin: '37AABCS1429B1Z1',
-        customer_dl: 'AP/VJA/20B/88210',
-        payment_method: 'Bank Transfer',
-        payment_status: 'Paid',
-        created_at: makeIso(y - 2, 3, 14, 10, 45),
-        items: [
-          { name: 'TELVEST-40', sku: 'VP-TEL-40', batch: 'TLV2405', exp: '2028-01-31', pack: '1*10', qty: 20, purchase: 59.00, price: 65.00, mrp: 85.00, gst: 12 },
-          { name: 'PENSEN DSR', sku: 'VP-PEN-DSR', batch: 'PDS2403', exp: '2028-02-28', pack: '1*10', qty: 15, purchase: 103.00, price: 114.00, mrp: 150.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-2024-002',
-        customer_name: 'Lakshmi Nursing Home Pharmacy',
-        customer_phone: '9440199887',
-        customer_gstin: '37AADCL5512K1Z5',
-        customer_dl: 'AP/VJA/20B/77412',
-        payment_method: 'UPI',
-        payment_status: 'Paid',
-        created_at: makeIso(y - 2, 8, 22, 16, 15),
-        items: [
-          { name: 'THIOFLEX 8', sku: 'VP-THF-8', batch: 'THF2406', exp: '2027-09-30', pack: '1*10', qty: 12, purchase: 188.00, price: 209.00, mrp: 275.00, gst: 12 },
-          { name: 'TRACET', sku: 'VP-TRC', batch: 'TRC2409', exp: '2028-03-31', pack: '1*10', qty: 15, purchase: 123.00, price: 137.00, mrp: 180.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-2025-001',
-        customer_name: 'Ramesh Hospitals Pharmacy',
-        customer_phone: '9866411223',
-        customer_gstin: '37AAACR4411M1Z8',
-        customer_dl: 'AP/VJA/20B/99104',
-        payment_method: 'Bank Transfer',
-        payment_status: 'Paid',
-        created_at: makeIso(y - 1, 1, 18, 12, 20),
-        items: [
-          { name: 'ZOLID-600', sku: 'VP-ZLD-600', batch: 'Z602413', exp: '2028-05-31', pack: '1*10', qty: 10, purchase: 253.00, price: 281.00, mrp: 370.00, gst: 12 },
-          { name: 'TRIENZO', sku: 'VP-TRZ', batch: 'TRZ2410', exp: '2027-12-31', pack: '1*10', qty: 10, purchase: 154.00, price: 171.00, mrp: 225.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-2025-002',
-        customer_name: 'Vijayawada Care Clinic',
-        customer_phone: '9000512345',
-        customer_gstin: '',
-        customer_dl: 'AP/VJA/20B/66320',
-        payment_method: 'Card',
-        payment_status: 'Paid',
-        created_at: makeIso(y - 1, 6, 9, 18, 10),
-        items: [
-          { name: 'OSTEOCAL-K2', sku: 'VP-OST-K2', batch: 'OST2402', exp: '2027-11-30', pack: '1*10', qty: 8, purchase: 146.00, price: 163.00, mrp: 215.00, gst: 12 },
-          { name: 'RADO-D', sku: 'VP-RAD-D', batch: 'RAD2404', exp: '2027-10-31', pack: '1*10', qty: 12, purchase: 76.00, price: 84.00, mrp: 110.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-2025-003',
-        customer_name: 'Sri Sai Medicos',
-        customer_phone: '9989077665',
-        customer_gstin: '37ABFCS8821D1Z9',
-        customer_dl: 'AP/VJA/20B/91002',
-        payment_method: 'UPI',
-        payment_status: 'Paid',
-        created_at: makeIso(y - 1, 10, 27, 14, 50),
-        items: [
-          { name: 'THIOFLEX GEL', sku: 'VP-THF-GEL', batch: 'THG2408', exp: '2027-07-31', pack: '30GM', qty: 10, purchase: 161.00, price: 179.00, mrp: 235.00, gst: 12 },
-          { name: 'THIOFLEX-A4', sku: 'VP-THF-A4', batch: 'TFA2407', exp: '2027-08-31', pack: '1*10', qty: 15, purchase: 127.00, price: 141.00, mrp: 185.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: `VP-${y}-101`,
-        customer_name: 'Governorpet Health Center',
-        customer_phone: '9848055667',
-        customer_gstin: '',
-        customer_dl: '',
-        payment_method: 'UPI',
-        payment_status: 'Paid',
-        created_at: makeIso(y, Math.max(0, m - 2), 11, 11, 15),
-        items: [
-          { name: 'Esvod-20', sku: 'VP-ESV-20', batch: 'ESV2401', exp: '2027-12-31', pack: '1*10', qty: 10, purchase: 80.00, price: 89.00, mrp: 117.00, gst: 12 },
-          { name: 'TELVEST-40', sku: 'VP-TEL-40', batch: 'TLV2405', exp: '2028-01-31', pack: '1*10', qty: 25, purchase: 59.00, price: 65.00, mrp: 85.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: `VP-${y}-102`,
-        customer_name: 'Venkateswara Medical Hall',
-        customer_phone: '9701233445',
-        customer_gstin: '37AAECV1122P1Z2',
-        customer_dl: 'AP/VJA/20B/44321',
-        payment_method: 'Bank Transfer',
-        payment_status: 'Paid',
-        created_at: makeIso(y, Math.max(0, m - 1), 19, 15, 40),
-        items: [
-          { name: 'ZOLADIN-MR', sku: 'VP-ZLD-MR', batch: 'ZMR2412', exp: '2028-04-30', pack: '1*10', qty: 5, purchase: 354.00, price: 394.00, mrp: 525.00, gst: 12 },
-          { name: 'PENSEN DSR', sku: 'VP-PEN-DSR', batch: 'PDS2403', exp: '2028-02-28', pack: '1*10', qty: 10, purchase: 103.00, price: 114.00, mrp: 150.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-1001',
-        customer_name: 'P. Narasimha Rao (Walk-in)',
-        customer_phone: '9885233110',
-        customer_gstin: '',
-        customer_dl: '',
-        payment_method: 'Cash',
-        payment_status: 'Paid',
-        created_at: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        items: [
-          { name: 'TRIENZO-D', sku: 'VP-TRZ-D', batch: 'TZD2411', exp: '2027-11-30', pack: '1*10', qty: 4, purchase: 154.00, price: 171.00, mrp: 225.00, gst: 12 },
-          { name: 'RADO-D', sku: 'VP-RAD-D', batch: 'RAD2404', exp: '2027-10-31', pack: '1*10', qty: 6, purchase: 76.00, price: 84.00, mrp: 110.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-1002',
-        customer_name: 'Annapurna Pharma Distributors',
-        customer_phone: '9440566778',
-        customer_gstin: '37AABCA7788E1Z4',
-        customer_dl: 'AP/VJA/20B/55890',
-        payment_method: 'UPI',
-        payment_status: 'Paid',
-        created_at: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-        items: [
-          { name: 'THIOFLEX 8', sku: 'VP-THF-8', batch: 'THF2406', exp: '2027-09-30', pack: '1*10', qty: 8, purchase: 188.00, price: 209.00, mrp: 275.00, gst: 12 },
-          { name: 'TELVEST-40', sku: 'VP-TEL-40', batch: 'TLV2405', exp: '2028-01-31', pack: '1*10', qty: 15, purchase: 59.00, price: 65.00, mrp: 85.00, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-1003',
-        customer_name: 'Walk-in Customer',
-        customer_phone: '',
-        customer_gstin: '',
-        customer_dl: '',
-        payment_method: 'Cash',
-        payment_status: 'Paid',
-        created_at: now.toISOString(),
-        items: [
-          { name: 'Esvod-20', sku: 'VP-ESV-20', batch: 'ESV2401', exp: '2027-12-31', pack: '1*10', qty: 2, purchase: 80.00, price: 89.00, mrp: 117.00, gst: 12 },
-          { name: 'PENSEN DSR', sku: 'VP-PEN-DSR', batch: 'PDS2403', exp: '2028-02-28', pack: '1*10', qty: 2, purchase: 103.00, price: 114.00, mrp: 150.00, gst: 12 },
-        ],
-      },
-    ];
-
-    for (const inv of historicalInvoices) {
-      let subtotal = 0;
-      let taxAmount = 0;
-      let totalCost = 0;
-      const computedItems = inv.items.map((it) => {
-        const taxable = +(it.price * it.qty).toFixed(2);
-        const gstAmt = +(taxable * (it.gst / 100)).toFixed(2);
-        const lineTotal = +(taxable + gstAmt).toFixed(2);
-        subtotal += taxable;
-        taxAmount += gstAmt;
-        totalCost += it.purchase * it.qty;
-        return { ...it, taxable, gstAmt, lineTotal };
-      });
-      subtotal = +subtotal.toFixed(2);
-      taxAmount = +taxAmount.toFixed(2);
-      const exactTotal = +(subtotal + taxAmount).toFixed(2);
-      const grandTotal = Math.round(exactTotal);
-      const roundOff = +(grandTotal - exactTotal).toFixed(2);
-      const estProfit = +(subtotal - totalCost).toFixed(2);
-
-      const insInv = await tx.query(
-        `INSERT INTO invoices (
-          client_invoice_uid, invoice_number, customer_name, customer_phone,
-          customer_gstin, customer_dl, subtotal, discount_amount, tax_amount,
-          round_off, grand_total, total_cost, estimated_profit, payment_method,
-          payment_status, amount_paid, balance_due, created_by, created_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11,$12,$13,$14,$10,0,'S. Satyendranath (Proprietor)',$15)
-        ON CONFLICT (invoice_number) DO NOTHING RETURNING id`,
-        [
-          `HIST-${inv.invoice_number}`,
-          inv.invoice_number,
-          inv.customer_name,
-          inv.customer_phone,
-          inv.customer_gstin,
-          inv.customer_dl,
-          subtotal,
-          taxAmount,
-          roundOff,
-          grandTotal,
-          +totalCost.toFixed(2),
-          estProfit,
-          inv.payment_method,
-          inv.payment_status,
-          inv.created_at,
-        ]
-      );
-
-      if (insInv.rows.length > 0) {
-        const invoiceId = insInv.rows[0].id;
-        for (const ci of computedItems) {
-          await tx.query(
-            `INSERT INTO invoice_items (
-              invoice_id, product_id, product_name, sku, hsn_code, batch_number, expiry_date,
-              pack_size, quantity, purchase_price, unit_price, mrp,
-              item_discount_percent, item_discount_amount, gst_percentage,
-              taxable_amount, gst_amount, line_total
-            ) VALUES ($1,$2,$3,$4,'3004',$5,$6,$7,$8,$9,$10,$11,0,0,$12,$13,$14,$15)`,
-            [
-              invoiceId,
-              prodIdMap[ci.name] || null,
-              ci.name,
-              ci.sku,
-              ci.batch,
-              ci.exp,
-              ci.pack,
-              ci.qty,
-              ci.purchase,
-              ci.price,
-              ci.mrp,
-              ci.gst,
-              ci.taxable,
-              ci.gstAmt,
-              ci.lineTotal,
-            ]
-          );
-        }
-      }
-    }
+    // 3. Reset invoice counter to 1001 for clean fresh billing
+    await tx.query("UPDATE settings SET next_invoice_number = 1001 WHERE id = 1");
   });
 }
