@@ -43,8 +43,28 @@ function authenticateToken(req, res, next) {
 app.get('/api/ping', (req, res) => {
   res.json({ online: true, timestamp: new Date().toISOString() });
 });
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', online: true, timestamp: new Date().toISOString() });
+
+app.get('/api/health', async (req, res) => {
+  try {
+    const db = await getDb();
+    await db.query('SELECT 1 as ok');
+    res.json({
+      status: 'ok',
+      online: true,
+      database: 'connected',
+      hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      online: true,
+      database: 'failed',
+      hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+      error: err.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 // ==========================================
@@ -52,7 +72,7 @@ app.get('/api/health', (req, res) => {
 // ==========================================
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password are required.' });
     }
@@ -87,7 +107,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error during login.' });
+    res.status(500).json({ error: err.message || 'Internal server error during login.' });
   }
 });
 

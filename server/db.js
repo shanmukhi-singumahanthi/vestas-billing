@@ -30,11 +30,16 @@ export async function getDb() {
     try {
       let dbInstance = null;
 
-      if (process.env.DATABASE_URL) {
+      const rawUrl = (process.env.DATABASE_URL || '').trim().replace(/^['"]|['"]$/g, '');
+
+      if (rawUrl) {
         const isSsl = process.env.DATABASE_SSL !== 'false';
         const pool = new pg.Pool({
-          connectionString: process.env.DATABASE_URL,
+          connectionString: rawUrl,
           ssl: isSsl ? { rejectUnauthorized: false } : false,
+          connectionTimeoutMillis: 15000, // Allow up to 15s for Neon compute to wake from suspended state
+          idleTimeoutMillis: 30000,
+          max: 10,
         });
 
         dbInstance = {
@@ -58,6 +63,10 @@ export async function getDb() {
             }
           },
         };
+      } else if (process.env.VERCEL) {
+        throw new Error(
+          'DATABASE_URL environment variable is missing on Vercel! In Vercel Project Settings > Environment Variables, add DATABASE_URL (your Neon connection string), then click Deployments > Redeploy.'
+        );
       } else {
         const { PGlite } = await import('@electric-sql/pglite');
         const pgDataPath = path.join(dataDir, 'pgdata');
