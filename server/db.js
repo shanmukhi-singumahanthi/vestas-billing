@@ -1,4 +1,3 @@
-import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import path from 'path';
@@ -9,66 +8,85 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const dataDir = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+try {
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+} catch {
+  // Read-only filesystem in serverless environments (e.g. Vercel)
 }
 
-let dbInstance = null;
+let dbPromise = null;
 
 /**
  * Unified PostgreSQL database interface.
- * Uses external PostgreSQL/Supabase if DATABASE_URL is set in .env,
+ * Uses external PostgreSQL (Neon, Supabase, Render) if DATABASE_URL is set,
  * otherwise uses persistent on-disk PostgreSQL (PGlite) in ./data/pgdata.
  */
 export async function getDb() {
-  if (dbInstance) return dbInstance;
+  if (dbPromise) return dbPromise;
 
-  if (process.env.DATABASE_URL) {
-    const pool = new pg.Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
-    });
-    dbInstance = {
-      query: (text, params) => pool.query(text, params),
-      exec: (text) => pool.query(text),
-      transaction: async (fn) => {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-          const result = await fn({
-            query: (t, p) => client.query(t, p),
-            exec: (t) => client.query(t),
-          });
-          await client.query('COMMIT');
-          return result;
-        } catch (err) {
-          await client.query('ROLLBACK');
-          throw err;
-        } finally {
-          client.release();
-        }
-      },
-    };
-  } else {
-    const pgDataPath = path.join(dataDir, 'pgdata');
-    const pglite = new PGlite(pgDataPath);
-    await pglite.waitReady;
-    dbInstance = {
-      query: (text, params) => pglite.query(text, params),
-      exec: (text) => pglite.exec(text),
-      transaction: async (fn) => {
-        return await pglite.transaction(async (tx) => {
-          return await fn({
-            query: (t, p) => tx.query(t, p),
-            exec: (t) => tx.exec(t),
-          });
+  dbPromise = (async () => {
+    try {
+      let dbInstance = null;
+
+      if (process.env.DATABASE_URL) {
+        const isSsl = process.env.DATABASE_SSL !== 'false';
+        const pool = new pg.Pool({
+          connectionString: process.env.DATABASE_URL,
+          ssl: isSsl ? { rejectUnauthorized: false } : false,
         });
-      },
-    };
-  }
 
-  await initializeSchema(dbInstance);
-  return dbInstance;
+        dbInstance = {
+          query: (text, params) => pool.query(text, params),
+          exec: (text) => pool.query(text),
+          transaction: async (fn) => {
+            const client = await pool.connect();
+            try {
+              await client.query('BEGIN');
+              const result = await fn({
+                query: (t, p) => client.query(t, p),
+                exec: (t) => client.query(t),
+              });
+              await client.query('COMMIT');
+              return result;
+            } catch (err) {
+              await client.query('ROLLBACK');
+              throw err;
+            } finally {
+              client.release();
+            }
+          },
+        };
+      } else {
+        const { PGlite } = await import('@electric-sql/pglite');
+        const pgDataPath = path.join(dataDir, 'pgdata');
+        const pglite = new PGlite(pgDataPath);
+        await pglite.waitReady;
+
+        dbInstance = {
+          query: (text, params) => pglite.query(text, params),
+          exec: (text) => pglite.exec(text),
+          transaction: async (fn) => {
+            return await pglite.transaction(async (tx) => {
+              return await fn({
+                query: (t, p) => tx.query(t, p),
+                exec: (t) => tx.exec(t),
+              });
+            });
+          },
+        };
+      }
+
+      await initializeSchema(dbInstance);
+      return dbInstance;
+    } catch (err) {
+      dbPromise = null;
+      throw err;
+    }
+  })();
+
+  return dbPromise;
 }
 
 async function initializeSchema(db) {
