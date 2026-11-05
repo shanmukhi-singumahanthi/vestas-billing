@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getDb } from './db.js';
+import { getDb, resetToOfficialVestasCatalog } from './db.js';
 
 dotenv.config();
 
@@ -64,6 +64,21 @@ app.get('/api/health', async (req, res) => {
       error: err.message,
       timestamp: new Date().toISOString(),
     });
+  }
+});
+
+// Reset catalog to official Vestas Pharmaceuticals price list
+app.post('/api/catalog/reset-official', async (req, res) => {
+  try {
+    const db = await getDb();
+    await resetToOfficialVestasCatalog(db);
+    res.json({
+      success: true,
+      message: 'Vestas Pharmaceuticals official catalog (items 15-27) loaded successfully. All old dummy data wiped.',
+    });
+  } catch (err) {
+    console.error('Catalog reset error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

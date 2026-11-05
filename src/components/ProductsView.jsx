@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   X,
   IndianRupee,
+  RotateCcw,
 } from 'lucide-react';
 import { apiRequest } from '../utils/api';
 import {
@@ -224,6 +225,32 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
     }
   };
 
+  const [isResetting, setIsResetting] = useState(false);
+
+  const handleResetOfficialCatalog = async () => {
+    if (
+      !window.confirm(
+        'Are you sure you want to reload the official Vestas Pharmaceuticals price list (items 15-27)? All dummy data will be removed and replaced with authentic Vestas products.'
+      )
+    ) {
+      return;
+    }
+    setIsResetting(true);
+    setFeedback(null);
+    try {
+      const res = await apiRequest('/api/catalog/reset-official', { method: 'POST' });
+      setFeedback({
+        type: 'success',
+        text: res.message || 'Official Vestas Pharmaceuticals catalog loaded successfully!',
+      });
+      onRefresh();
+    } catch (err) {
+      setFeedback({ type: 'error', text: err.message || 'Failed to reset catalog.' });
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   const handleExportExcel = () => {
     const rows = filteredProducts.map((p) => ({
       'Product Name': p.name,
@@ -309,6 +336,16 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
             Import Template
+          </button>
+          <button
+            type="button"
+            disabled={isResetting}
+            onClick={handleResetOfficialCatalog}
+            title="Reload official 13 Vestas medicines price card"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-xs font-semibold text-amber-900 transition cursor-pointer disabled:opacity-50"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 text-amber-700 ${isResetting ? 'animate-spin' : ''}`} />
+            {isResetting ? 'Reloading...' : 'Official Price List'}
           </button>
           <button
             type="button"
@@ -549,7 +586,7 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
                     required
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="e.g., Dolo 650mg Tablet"
+                    placeholder="e.g., TELVEST-40 or PENSEN DSR"
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-sky-600 outline-none"
                   />
                 </div>

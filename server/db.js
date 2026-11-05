@@ -320,40 +320,11 @@ async function initializeSchema(db) {
     );
   }
 
-  // Clean up automated test artifact rows if present
-  await db.exec(`
-    DELETE FROM invoices WHERE invoice_number LIKE 'VP-OFF-%';
-    DELETE FROM products WHERE batch_number LIKE 'BATCH-MAN-%';
-  `);
-
-  // Seed initial medicines & customers if products table is empty (e.g., on fresh clone)
-  const prodCountRes = await db.query('SELECT COUNT(*) as count FROM products');
-  if (Number(prodCountRes.rows[0].count) === 0) {
-    const initialProducts = [
-      ['Dolo 650mg Tablet', 'MED-1001', '8901111001', '3004', 'Tablets', 'Micro Labs Ltd', 'DL2504A', '2027-11-30', '15 Tabs', 'Rack A-1', 21.5, 28.0, 33.6, 12.0, 240, 40],
-      ['Dolo 650mg Tablet', 'MED-1001', '8901111001', '3004', 'Tablets', 'Micro Labs Ltd', 'DL2601B', '2028-04-30', '15 Tabs', 'Rack A-1', 22.0, 29.0, 34.5, 12.0, 120, 40],
-      ['Augmentin 625 Duo Tablet', 'MED-1002', '8901111002', '3004', 'Tablets', 'GSK Pharmaceuticals', 'AUG-892B', '2027-08-31', '10 Tabs', 'Rack A-2', 142.0, 182.0, 204.5, 12.0, 95, 25],
-      ['Pan-D Capsule PR', 'MED-1003', '8901111003', '3004', 'Capsules', 'Alkem Laboratories', 'PND-445', '2027-05-31', '15 Caps', 'Rack B-1', 135.0, 175.0, 210.0, 12.0, 110, 25],
-      ['Azithral 500 Tablet', 'MED-1004', '8901111004', '3004', 'Tablets', 'Alembic Pharmaceuticals', 'AZT-209', '2027-06-30', '5 Tabs', 'Rack A-3', 84.0, 112.0, 132.5, 12.0, 80, 20],
-      ['Telma 40 Tablet', 'MED-1005', '8901111005', '3004', 'Tablets', 'Glenmark Pharmaceuticals', 'TLM-772', '2027-10-31', '15 Tabs', 'Rack C-1', 165.0, 210.0, 245.0, 12.0, 140, 30],
-      ['Monocef 1g Injection', 'MED-1006', '8901111006', '3004', 'Injections', 'Aristo Pharmaceuticals', 'MNC-109', '2027-02-28', '1 Vial', 'Rack D-1', 42.0, 58.0, 69.5, 12.0, 18, 25],
-      ['Ascoril LS Syrup 100ml', 'MED-1007', '8901111007', '3004', 'Syrups', 'Glenmark Pharmaceuticals', 'ASC-331', '2027-04-30', '100 ml', 'Rack E-1', 85.0, 110.0, 129.0, 12.0, 65, 20],
-      ['Glycomet-GP 2 Tablet PR', 'MED-1008', '8901111008', '3004', 'Tablets', 'USV Pvt Ltd', 'GLY-884', '2027-07-31', '15 Tabs', 'Rack C-2', 118.0, 154.0, 182.0, 12.0, 90, 25],
-      ['Shelcal 500 Tablet', 'MED-1009', '8901111009', '3004', 'Tablets', 'Torrent Pharmaceuticals', 'SHL-512', '2027-09-30', '15 Tabs', 'Rack B-3', 92.0, 122.0, 144.0, 12.0, 15, 25],
-    ];
-    for (const p of initialProducts) {
-      await db.query(
-        `INSERT INTO products (
-          name, sku, barcode, hsn_code, category, manufacturer, batch_number,
-          expiry_date, pack_size, rack_location, purchase_price, selling_price,
-          mrp, gst_percentage, stock, min_stock_level
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-        p
-      );
-    }
-
+  // Ensure default customers exist
+  const custCountRes = await db.query('SELECT COUNT(*) as count FROM customers');
+  if (Number(custCountRes.rows[0].count) === 0) {
     const initialCustomers = [
-      ['Sri Durga Medicals', '9848122334', 'sridurgamedicals@gmail.com', 'Besant Road, Vijayawada', '37AABCS1429B1Z1', 'AP/VJA/20B/88210', 0, 14200],
+      ['Sri Durga Medicals', '9848122334', 'sridurgamedicals@gmail.com', 'Besant Road, Governorpet, Vijayawada', '37AABCS1429B1Z1', 'AP/VJA/20B/88210', 0, 14200],
       ['Lakshmi Nursing Home Pharmacy', '9440199887', 'lakshminursing@gmail.com', 'Suryaraopet, Vijayawada', '37AADCL5512K1Z5', 'AP/VJA/20B/77412', 0, 28450],
       ['Ramesh Hospitals Pharmacy', '9866411223', 'pharmacy@rameshhospitals.com', 'MG Road, Vijayawada', '37AAACR4411M1Z8', 'AP/VJA/20B/99104', 0, 46900],
     ];
@@ -366,15 +337,84 @@ async function initializeSchema(db) {
     }
   }
 
-  // Ensure comprehensive multi-year, multi-month, multi-day & up-to-date invoice history is available
-  const histCheck = await db.query(
-    "SELECT COUNT(*) as count FROM invoices WHERE invoice_number = 'VP-2024-001'"
+  // Check if we need to remove all old dummy medicines and load the official Vestas Pharmaceuticals catalog
+  const checkRealVestas = await db.query(
+    "SELECT id FROM products WHERE name IN ('TELVEST-40', 'Esvod-20', 'THIOFLEX 8', 'ZOLID-600')"
   );
-  if (Number(histCheck.rows[0].count) === 0) {
+  if (checkRealVestas.rows.length === 0) {
+    await resetToOfficialVestasCatalog(db);
+  }
+}
+
+/**
+ * Completely resets and replaces all medicines and sample invoices with the official Vestas Pharmaceuticals price list
+ */
+export async function resetToOfficialVestasCatalog(db) {
+  await db.transaction(async (tx) => {
+    // 1. Delete all old dummy invoices, items, and products
+    await tx.exec(`
+      DELETE FROM invoice_items;
+      DELETE FROM customer_payments;
+      DELETE FROM stock_movements;
+      DELETE FROM invoices;
+      DELETE FROM products;
+    `);
+
+    // Reset sequences safely
+    await tx.exec(`
+      SELECT setval('products_id_seq', 1, false);
+      SELECT setval('invoices_id_seq', 1, false);
+      SELECT setval('invoice_items_id_seq', 1, false);
+      SELECT setval('stock_movements_id_seq', 1, false);
+    `);
+
+    // 2. Insert all 13 official products from the Vestas Pharmaceuticals price card (items 15 to 27)
+    // S.No | Medicine Name | MRP | Selling Rate | Purchase Rate | Pack Size
+    const vestasProducts = [
+      // Name, SKU, Barcode, HSN, Category, Manufacturer, Batch, Expiry, Pack Size, Rack, Purchase, Selling, MRP, GST%, Stock, MinStock
+      ['Esvod-20', 'VP-ESV-20', '890123456015', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'ESV2401', '2027-12-31', '1*10', 'Rack A-1', 80.00, 89.00, 117.00, 12.00, 150, 20],
+      ['OSTEOCAL-K2', 'VP-OST-K2', '890123456016', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'OST2402', '2027-11-30', '1*10', 'Rack A-2', 146.00, 163.00, 215.00, 12.00, 120, 20],
+      ['PENSEN DSR', 'VP-PEN-DSR', '890123456017', '3004', 'Capsules', 'Vestas Pharmaceuticals', 'PDS2403', '2028-02-28', '1*10', 'Rack B-1', 103.00, 114.00, 150.00, 12.00, 180, 25],
+      ['RADO-D', 'VP-RAD-D', '890123456018', '3004', 'Capsules', 'Vestas Pharmaceuticals', 'RAD2404', '2027-10-31', '1*10', 'Rack B-2', 76.00, 84.00, 110.00, 12.00, 140, 20],
+      ['TELVEST-40', 'VP-TEL-40', '890123456019', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TLV2405', '2028-01-31', '1*10', 'Rack C-1', 59.00, 65.00, 85.00, 12.00, 220, 30],
+      ['THIOFLEX 8', 'VP-THF-8', '890123456020', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'THF2406', '2027-09-30', '1*10', 'Rack C-2', 188.00, 209.00, 275.00, 12.00, 110, 20],
+      ['THIOFLEX-A4', 'VP-THF-A4', '890123456021', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TFA2407', '2027-08-31', '1*10', 'Rack C-3', 127.00, 141.00, 185.00, 12.00, 130, 20],
+      ['THIOFLEX GEL', 'VP-THF-GEL', '890123456022', '3004', 'Ointments', 'Vestas Pharmaceuticals', 'THG2408', '2027-07-31', '30GM', 'Rack D-1', 161.00, 179.00, 235.00, 12.00, 95, 15],
+      ['TRACET', 'VP-TRC', '890123456023', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TRC2409', '2028-03-31', '1*10', 'Rack A-3', 123.00, 137.00, 180.00, 12.00, 160, 25],
+      ['TRIENZO', 'VP-TRZ', '890123456024', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TRZ2410', '2027-12-31', '1*10', 'Rack A-4', 154.00, 171.00, 225.00, 12.00, 140, 20],
+      ['TRIENZO-D', 'VP-TRZ-D', '890123456025', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'TZD2411', '2027-11-30', '1*10', 'Rack A-5', 154.00, 171.00, 225.00, 12.00, 150, 20],
+      ['ZOLADIN-MR', 'VP-ZLD-MR', '890123456026', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'ZMR2412', '2028-04-30', '1*10', 'Rack B-3', 354.00, 394.00, 525.00, 12.00, 85, 15],
+      ['ZOLID-600', 'VP-ZLD-600', '890123456027', '3004', 'Tablets', 'Vestas Pharmaceuticals', 'Z602413', '2028-05-31', '1*10', 'Rack B-4', 253.00, 281.00, 370.00, 12.00, 105, 20],
+    ];
+
+    const prodIdMap = {};
+    for (const p of vestasProducts) {
+      const ins = await tx.query(
+        `INSERT INTO products (
+          name, sku, barcode, hsn_code, category, manufacturer, batch_number,
+          expiry_date, pack_size, rack_location, purchase_price, selling_price,
+          mrp, gst_percentage, stock, min_stock_level
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        p
+      );
+      prodIdMap[p[0]] = ins.rows[0].id;
+
+      await tx.query(
+        `INSERT INTO stock_movements (
+          product_id, product_name, batch_number, movement_type, quantity_change,
+          previous_stock, new_stock, unit_cost, reference_id, reason, performed_by
+        ) VALUES ($1,$2,$3,'OPENING_STOCK',$4,0,$4,$5,'INIT-STOCK','Initial Stock Entry - Vestas Price List','S. Satyendranath (Proprietor)')`,
+        [ins.rows[0].id, p[0], p[6], p[14], p[10]]
+      );
+    }
+
+    // 3. Update settings next_invoice_number to 1004
+    await tx.query("UPDATE settings SET next_invoice_number = 1004 WHERE id = 1");
+
+    // 4. Seed clean, realistic invoices using exclusively these Vestas products across 2024, 2025, 2026
     const now = new Date();
     const y = now.getFullYear();
     const m = now.getMonth();
-    const d = now.getDate();
 
     const makeIso = (year, monthIndex, day, hour = 11, min = 30) => {
       const dt = new Date(year, monthIndex, day, hour, min, 0);
@@ -382,7 +422,6 @@ async function initializeSchema(db) {
     };
 
     const historicalInvoices = [
-      // Previous Years (2024 & 2025)
       {
         invoice_number: 'VP-2024-001',
         customer_name: 'Sri Durga Medicals',
@@ -393,8 +432,8 @@ async function initializeSchema(db) {
         payment_status: 'Paid',
         created_at: makeIso(y - 2, 3, 14, 10, 45),
         items: [
-          { name: 'Augmentin 625 Duo Tablet', sku: 'MED-1002', batch: 'AUG-24A', exp: '2026-12-31', qty: 10, purchase: 142, price: 182, mrp: 204.5, gst: 12 },
-          { name: 'Dolo 650mg Tablet', sku: 'MED-1001', batch: 'DL2401', exp: '2027-06-30', qty: 25, purchase: 21.5, price: 28, mrp: 33.6, gst: 12 },
+          { name: 'TELVEST-40', sku: 'VP-TEL-40', batch: 'TLV2405', exp: '2028-01-31', pack: '1*10', qty: 20, purchase: 59.00, price: 65.00, mrp: 85.00, gst: 12 },
+          { name: 'PENSEN DSR', sku: 'VP-PEN-DSR', batch: 'PDS2403', exp: '2028-02-28', pack: '1*10', qty: 15, purchase: 103.00, price: 114.00, mrp: 150.00, gst: 12 },
         ],
       },
       {
@@ -407,8 +446,8 @@ async function initializeSchema(db) {
         payment_status: 'Paid',
         created_at: makeIso(y - 2, 8, 22, 16, 15),
         items: [
-          { name: 'Pan-D Capsule PR', sku: 'MED-1003', batch: 'PND-2409', exp: '2026-11-30', qty: 15, purchase: 135, price: 175, mrp: 210, gst: 12 },
-          { name: 'Monocef 1g Injection', sku: 'MED-1006', batch: 'MNC-2408', exp: '2026-10-31', qty: 20, purchase: 42, price: 58, mrp: 69.5, gst: 12 },
+          { name: 'THIOFLEX 8', sku: 'VP-THF-8', batch: 'THF2406', exp: '2027-09-30', pack: '1*10', qty: 12, purchase: 188.00, price: 209.00, mrp: 275.00, gst: 12 },
+          { name: 'TRACET', sku: 'VP-TRC', batch: 'TRC2409', exp: '2028-03-31', pack: '1*10', qty: 15, purchase: 123.00, price: 137.00, mrp: 180.00, gst: 12 },
         ],
       },
       {
@@ -421,8 +460,8 @@ async function initializeSchema(db) {
         payment_status: 'Paid',
         created_at: makeIso(y - 1, 1, 18, 12, 20),
         items: [
-          { name: 'Telma 40 Tablet', sku: 'MED-1005', batch: 'TLM-2501', exp: '2027-08-31', qty: 18, purchase: 165, price: 210, mrp: 245, gst: 12 },
-          { name: 'Glycomet-GP 2 Tablet PR', sku: 'MED-1008', batch: 'GLY-2502', exp: '2027-05-31', qty: 12, purchase: 118, price: 154, mrp: 182, gst: 12 },
+          { name: 'ZOLID-600', sku: 'VP-ZLD-600', batch: 'Z602413', exp: '2028-05-31', pack: '1*10', qty: 10, purchase: 253.00, price: 281.00, mrp: 370.00, gst: 12 },
+          { name: 'TRIENZO', sku: 'VP-TRZ', batch: 'TRZ2410', exp: '2027-12-31', pack: '1*10', qty: 10, purchase: 154.00, price: 171.00, mrp: 225.00, gst: 12 },
         ],
       },
       {
@@ -435,8 +474,8 @@ async function initializeSchema(db) {
         payment_status: 'Paid',
         created_at: makeIso(y - 1, 6, 9, 18, 10),
         items: [
-          { name: 'Azithral 500 Tablet', sku: 'MED-1004', batch: 'AZT-2506', exp: '2027-09-30', qty: 14, purchase: 84, price: 112, mrp: 132.5, gst: 12 },
-          { name: 'Shelcal 500 Tablet', sku: 'MED-1009', batch: 'SHL-2505', exp: '2027-12-31', qty: 10, purchase: 92, price: 122, mrp: 144, gst: 12 },
+          { name: 'OSTEOCAL-K2', sku: 'VP-OST-K2', batch: 'OST2402', exp: '2027-11-30', pack: '1*10', qty: 8, purchase: 146.00, price: 163.00, mrp: 215.00, gst: 12 },
+          { name: 'RADO-D', sku: 'VP-RAD-D', batch: 'RAD2404', exp: '2027-10-31', pack: '1*10', qty: 12, purchase: 76.00, price: 84.00, mrp: 110.00, gst: 12 },
         ],
       },
       {
@@ -449,11 +488,10 @@ async function initializeSchema(db) {
         payment_status: 'Paid',
         created_at: makeIso(y - 1, 10, 27, 14, 50),
         items: [
-          { name: 'Augmentin 625 Duo Tablet', sku: 'MED-1002', batch: 'AUG-892B', exp: '2027-08-31', qty: 8, purchase: 142, price: 182, mrp: 204.5, gst: 12 },
-          { name: 'Ascoril LS Syrup 100ml', sku: 'MED-1007', batch: 'ASC-331', exp: '2027-04-30', qty: 15, purchase: 85, price: 110, mrp: 129, gst: 12 },
+          { name: 'THIOFLEX GEL', sku: 'VP-THF-GEL', batch: 'THG2408', exp: '2027-07-31', pack: '30GM', qty: 10, purchase: 161.00, price: 179.00, mrp: 235.00, gst: 12 },
+          { name: 'THIOFLEX-A4', sku: 'VP-THF-A4', batch: 'TFA2407', exp: '2027-08-31', pack: '1*10', qty: 15, purchase: 127.00, price: 141.00, mrp: 185.00, gst: 12 },
         ],
       },
-      // Previous Months of Current Year
       {
         invoice_number: `VP-${y}-101`,
         customer_name: 'Governorpet Health Center',
@@ -462,10 +500,10 @@ async function initializeSchema(db) {
         customer_dl: '',
         payment_method: 'UPI',
         payment_status: 'Paid',
-        created_at: makeIso(y, Math.max(0, m - 3), 11, 11, 15),
+        created_at: makeIso(y, Math.max(0, m - 2), 11, 11, 15),
         items: [
-          { name: 'Pan-D Capsule PR', sku: 'MED-1003', batch: 'PND-445', exp: '2027-05-31', qty: 6, purchase: 135, price: 175, mrp: 210, gst: 12 },
-          { name: 'Dolo 650mg Tablet', sku: 'MED-1001', batch: 'DL2504A', exp: '2027-11-30', qty: 15, purchase: 21.5, price: 28, mrp: 33.6, gst: 12 },
+          { name: 'Esvod-20', sku: 'VP-ESV-20', batch: 'ESV2401', exp: '2027-12-31', pack: '1*10', qty: 10, purchase: 80.00, price: 89.00, mrp: 117.00, gst: 12 },
+          { name: 'TELVEST-40', sku: 'VP-TEL-40', batch: 'TLV2405', exp: '2028-01-31', pack: '1*10', qty: 25, purchase: 59.00, price: 65.00, mrp: 85.00, gst: 12 },
         ],
       },
       {
@@ -476,67 +514,52 @@ async function initializeSchema(db) {
         customer_dl: 'AP/VJA/20B/44321',
         payment_method: 'Bank Transfer',
         payment_status: 'Paid',
-        created_at: makeIso(y, Math.max(0, m - 2), 19, 15, 40),
+        created_at: makeIso(y, Math.max(0, m - 1), 19, 15, 40),
         items: [
-          { name: 'Telma 40 Tablet', sku: 'MED-1005', batch: 'TLM-772', exp: '2027-10-31', qty: 12, purchase: 165, price: 210, mrp: 245, gst: 12 },
-          { name: 'Monocef 1g Injection', sku: 'MED-1006', batch: 'MNC-109', exp: '2027-02-28', qty: 15, purchase: 42, price: 58, mrp: 69.5, gst: 12 },
+          { name: 'ZOLADIN-MR', sku: 'VP-ZLD-MR', batch: 'ZMR2412', exp: '2028-04-30', pack: '1*10', qty: 5, purchase: 354.00, price: 394.00, mrp: 525.00, gst: 12 },
+          { name: 'PENSEN DSR', sku: 'VP-PEN-DSR', batch: 'PDS2403', exp: '2028-02-28', pack: '1*10', qty: 10, purchase: 103.00, price: 114.00, mrp: 150.00, gst: 12 },
         ],
       },
       {
-        invoice_number: `VP-${y}-103`,
-        customer_name: 'K. Suryanarayana (Walk-in)',
-        customer_phone: '9391044556',
-        customer_gstin: '',
-        customer_dl: '',
-        payment_method: 'Cash',
-        payment_status: 'Paid',
-        created_at: makeIso(y, Math.max(0, m - 1), 16, 10, 30),
-        items: [
-          { name: 'Glycomet-GP 2 Tablet PR', sku: 'MED-1008', batch: 'GLY-884', exp: '2027-07-31', qty: 5, purchase: 118, price: 154, mrp: 182, gst: 12 },
-          { name: 'Shelcal 500 Tablet', sku: 'MED-1009', batch: 'SHL-512', exp: '2027-09-30', qty: 4, purchase: 92, price: 122, mrp: 144, gst: 12 },
-        ],
-      },
-      // Previous Days (4 days ago, 2 days ago, Yesterday)
-      {
-        invoice_number: 'VP-0998',
-        customer_name: 'M. Rajyalakshmi',
-        customer_phone: '9849123987',
-        customer_gstin: '',
-        customer_dl: '',
-        payment_method: 'UPI',
-        payment_status: 'Paid',
-        created_at: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000).toISOString(),
-        items: [
-          { name: 'Azithral 500 Tablet', sku: 'MED-1004', batch: 'AZT-209', exp: '2027-06-30', qty: 4, purchase: 84, price: 112, mrp: 132.5, gst: 12 },
-          { name: 'Ascoril LS Syrup 100ml', sku: 'MED-1007', batch: 'ASC-331', exp: '2027-04-30', qty: 2, purchase: 85, price: 110, mrp: 129, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-0999',
-        customer_name: 'Annapurna Pharma Distributors',
-        customer_phone: '9440566778',
-        customer_gstin: '37AABCA7788E1Z4',
-        customer_dl: 'AP/VJA/20B/55890',
-        payment_method: 'Card',
-        payment_status: 'Paid',
-        created_at: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        items: [
-          { name: 'Augmentin 625 Duo Tablet', sku: 'MED-1002', batch: 'AUG-892B', exp: '2027-08-31', qty: 6, purchase: 142, price: 182, mrp: 204.5, gst: 12 },
-          { name: 'Pan-D Capsule PR', sku: 'MED-1003', batch: 'PND-445', exp: '2027-05-31', qty: 5, purchase: 135, price: 175, mrp: 210, gst: 12 },
-        ],
-      },
-      {
-        invoice_number: 'VP-1000',
-        customer_name: 'P. Narasimha Rao',
+        invoice_number: 'VP-1001',
+        customer_name: 'P. Narasimha Rao (Walk-in)',
         customer_phone: '9885233110',
         customer_gstin: '',
         customer_dl: '',
         payment_method: 'Cash',
         payment_status: 'Paid',
+        created_at: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        items: [
+          { name: 'TRIENZO-D', sku: 'VP-TRZ-D', batch: 'TZD2411', exp: '2027-11-30', pack: '1*10', qty: 4, purchase: 154.00, price: 171.00, mrp: 225.00, gst: 12 },
+          { name: 'RADO-D', sku: 'VP-RAD-D', batch: 'RAD2404', exp: '2027-10-31', pack: '1*10', qty: 6, purchase: 76.00, price: 84.00, mrp: 110.00, gst: 12 },
+        ],
+      },
+      {
+        invoice_number: 'VP-1002',
+        customer_name: 'Annapurna Pharma Distributors',
+        customer_phone: '9440566778',
+        customer_gstin: '37AABCA7788E1Z4',
+        customer_dl: 'AP/VJA/20B/55890',
+        payment_method: 'UPI',
+        payment_status: 'Paid',
         created_at: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000).toISOString(),
         items: [
-          { name: 'Telma 40 Tablet', sku: 'MED-1005', batch: 'TLM-772', exp: '2027-10-31', qty: 3, purchase: 165, price: 210, mrp: 245, gst: 12 },
-          { name: 'Dolo 650mg Tablet', sku: 'MED-1001', batch: 'DL2504A', exp: '2027-11-30', qty: 5, purchase: 21.5, price: 28, mrp: 33.6, gst: 12 },
+          { name: 'THIOFLEX 8', sku: 'VP-THF-8', batch: 'THF2406', exp: '2027-09-30', pack: '1*10', qty: 8, purchase: 188.00, price: 209.00, mrp: 275.00, gst: 12 },
+          { name: 'TELVEST-40', sku: 'VP-TEL-40', batch: 'TLV2405', exp: '2028-01-31', pack: '1*10', qty: 15, purchase: 59.00, price: 65.00, mrp: 85.00, gst: 12 },
+        ],
+      },
+      {
+        invoice_number: 'VP-1003',
+        customer_name: 'Walk-in Customer',
+        customer_phone: '',
+        customer_gstin: '',
+        customer_dl: '',
+        payment_method: 'Cash',
+        payment_status: 'Paid',
+        created_at: now.toISOString(),
+        items: [
+          { name: 'Esvod-20', sku: 'VP-ESV-20', batch: 'ESV2401', exp: '2027-12-31', pack: '1*10', qty: 2, purchase: 80.00, price: 89.00, mrp: 117.00, gst: 12 },
+          { name: 'PENSEN DSR', sku: 'VP-PEN-DSR', batch: 'PDS2403', exp: '2028-02-28', pack: '1*10', qty: 2, purchase: 103.00, price: 114.00, mrp: 150.00, gst: 12 },
         ],
       },
     ];
@@ -561,7 +584,7 @@ async function initializeSchema(db) {
       const roundOff = +(grandTotal - exactTotal).toFixed(2);
       const estProfit = +(subtotal - totalCost).toFixed(2);
 
-      const insInv = await db.query(
+      const insInv = await tx.query(
         `INSERT INTO invoices (
           client_invoice_uid, invoice_number, customer_name, customer_phone,
           customer_gstin, customer_dl, subtotal, discount_amount, tax_amount,
@@ -591,19 +614,21 @@ async function initializeSchema(db) {
       if (insInv.rows.length > 0) {
         const invoiceId = insInv.rows[0].id;
         for (const ci of computedItems) {
-          await db.query(
+          await tx.query(
             `INSERT INTO invoice_items (
-              invoice_id, product_name, sku, hsn_code, batch_number, expiry_date,
+              invoice_id, product_id, product_name, sku, hsn_code, batch_number, expiry_date,
               pack_size, quantity, purchase_price, unit_price, mrp,
               item_discount_percent, item_discount_amount, gst_percentage,
               taxable_amount, gst_amount, line_total
-            ) VALUES ($1,$2,$3,'3004',$4,$5,'10 Tabs',$6,$7,$8,$9,0,0,$10,$11,$12,$13)`,
+            ) VALUES ($1,$2,$3,$4,'3004',$5,$6,$7,$8,$9,$10,$11,0,0,$12,$13,$14,$15)`,
             [
               invoiceId,
+              prodIdMap[ci.name] || null,
               ci.name,
               ci.sku,
               ci.batch,
               ci.exp,
+              ci.pack,
               ci.qty,
               ci.purchase,
               ci.price,
@@ -617,5 +642,5 @@ async function initializeSchema(db) {
         }
       }
     }
-  }
+  });
 }
