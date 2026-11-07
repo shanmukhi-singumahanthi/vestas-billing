@@ -1,5 +1,14 @@
-const CACHE_NAME = 'vestas-pharma-offline-v2';
-const CORE_ASSETS = ['/', '/index.html'];
+const CACHE_NAME = 'vestas-pharma-offline-v3';
+const CORE_ASSETS = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/favicon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/logo.png',
+  '/logo.svg',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

@@ -18,6 +18,8 @@ import {
   Wifi,
   WifiOff,
   RefreshCw,
+  Download,
+  Smartphone,
 } from 'lucide-react';
 import {
   apiRequest,
@@ -43,16 +45,17 @@ import ReportsView from './components/ReportsView';
 import SettingsView from './components/SettingsView';
 import InvoiceModal, { VestasLogo } from './components/InvoiceModal';
 import SyncCenterModal from './components/SyncCenterModal';
+import InstallAppModal from './components/InstallAppModal';
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Owner Dashboard', icon: LayoutDashboard, ownerOnly: true },
-  { id: 'billing', label: 'New Bill (POS)', icon: ShoppingCart },
-  { id: 'invoices', label: 'Invoices & Reprint', icon: FileText },
-  { id: 'products', label: 'Medicines & Batches', icon: Pill },
-  { id: 'inventory', label: 'Inventory & Stock', icon: Boxes },
-  { id: 'customers', label: 'Customers & Dues', icon: Users },
-  { id: 'reports', label: 'Reports & Profit', icon: BarChart3, ownerOnly: true },
-  { id: 'settings', label: 'Settings & Backup', icon: Settings, ownerOnly: true },
+  { id: 'dashboard', label: 'Owner Dashboard', shortLabel: 'Home', icon: LayoutDashboard, ownerOnly: true },
+  { id: 'billing', label: 'New Bill (POS)', shortLabel: 'POS Bill', icon: ShoppingCart },
+  { id: 'invoices', label: 'Invoices & Reprint', shortLabel: 'Invoices', icon: FileText },
+  { id: 'products', label: 'Medicines & Batches', shortLabel: 'Medicines', icon: Pill },
+  { id: 'inventory', label: 'Inventory & Stock', shortLabel: 'Stock', icon: Boxes },
+  { id: 'customers', label: 'Customers & Dues', shortLabel: 'Customers', icon: Users },
+  { id: 'reports', label: 'Reports & Profit', shortLabel: 'Reports', icon: BarChart3, ownerOnly: true },
+  { id: 'settings', label: 'Settings & Backup', shortLabel: 'Settings', icon: Settings, ownerOnly: true },
 ];
 
 export default function App() {
@@ -78,6 +81,57 @@ export default function App() {
 
   // Active Invoice Preview / Print / PDF Modal
   const [selectedInvoice, setSelectedInvoice] = useState(null);
+
+  // PWA Native App Download / Installation State
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+  const [installModalOpen, setInstallModalOpen] = useState(false);
+
+  useEffect(() => {
+    const checkStandalone = () => {
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true;
+      setIsAppInstalled(standalone);
+    };
+    checkStandalone();
+
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setIsAppInstalled(true);
+      setDeferredInstallPrompt(null);
+      setInstallModalOpen(false);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleTriggerNativeInstall = async () => {
+    if (!deferredInstallPrompt) {
+      setInstallModalOpen(true);
+      return;
+    }
+    try {
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setIsAppInstalled(true);
+        setDeferredInstallPrompt(null);
+        setInstallModalOpen(false);
+      }
+    } catch {
+      setInstallModalOpen(true);
+    }
+  };
 
   const refreshSyncQueueState = useCallback(async () => {
     try {
@@ -205,7 +259,24 @@ export default function App() {
   }
 
   if (!user) {
-    return <LoginView onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <>
+        <LoginView
+          onLoginSuccess={handleLoginSuccess}
+          onOpenInstallModal={() => setInstallModalOpen(true)}
+          canNativeInstall={!!deferredInstallPrompt}
+          isAppInstalled={isAppInstalled}
+          onTriggerNativeInstall={handleTriggerNativeInstall}
+        />
+        <InstallAppModal
+          isOpen={installModalOpen}
+          onClose={() => setInstallModalOpen(false)}
+          canNativeInstall={!!deferredInstallPrompt}
+          isInstalled={isAppInstalled}
+          onTriggerNativeInstall={handleTriggerNativeInstall}
+        />
+      </>
+    );
   }
 
   const isWorker = user?.role === 'worker';
@@ -213,40 +284,72 @@ export default function App() {
   const alertCount =
     Number(dashboard?.lowStockCount || 0) + Number(dashboard?.outOfStockCount || 0);
 
+  // Mobile Bottom Bar items (up to 5 core tabs for thumb navigation)
+  const mobileBottomItems = isWorker
+    ? visibleNavItems.slice(0, 5)
+    : [
+        NAV_ITEMS[0], // Home
+        NAV_ITEMS[1], // POS Bill
+        NAV_ITEMS[2], // Invoices
+        NAV_ITEMS[3], // Medicines
+        NAV_ITEMS[4], // Stock
+      ];
+
   return (
-    <div className="min-h-screen pharma-app-bg flex flex-col lg:flex-row">
+    <div className="min-h-dvh pharma-app-bg flex flex-col lg:flex-row pb-16 lg:pb-0">
       {/* Mobile Header */}
-      <div className="lg:hidden bg-white/95 backdrop-blur-xs border-b border-slate-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center gap-2.5">
+      <div className="lg:hidden bg-white/95 backdrop-blur-md border-b border-slate-200 px-3 py-2.5 flex items-center justify-between sticky top-0 z-30 shadow-2xs">
+        <div className="flex items-center gap-2">
           <VestasLogo logoUrl={settings.logo_url} size="sm" variant="full" />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {!isAppInstalled && (
+            <button
+              type="button"
+              onClick={() =>
+                deferredInstallPrompt ? handleTriggerNativeInstall() : setInstallModalOpen(true)
+              }
+              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-sky-600 hover:bg-sky-700 text-white flex items-center gap-1 shadow-2xs cursor-pointer"
+              title="Download Mobile App"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>App</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setSyncModalOpen(true)}
-            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 ${
+            className={`px-2 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 ${
               isOffline
                 ? 'bg-amber-100 text-amber-800 border border-amber-300'
                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
             }`}
           >
             {isOffline ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
-            {isOffline ? 'Offline' : 'Online'}
+            <span className="hidden xs:inline">{isOffline ? 'Offline' : 'Online'}</span>
             {pendingQueue.length > 0 && ` (${pendingQueue.length})`}
           </button>
           <button
             type="button"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 rounded-xl border border-slate-200 text-slate-700"
+            className="p-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50"
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
       </div>
 
+      {/* Mobile Drawer Backdrop */}
+      {mobileMenuOpen && (
+        <div
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-2xs z-30 lg:hidden"
+        />
+      )}
+
       {/* Sidebar Navigation */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-68 bg-white/95 backdrop-blur-md border-r border-slate-200/90 flex flex-col justify-between transition-transform lg:translate-x-0 lg:static lg:w-64 shrink-0 shadow-xs ${
+        className={`fixed inset-y-0 left-0 z-40 w-72 max-w-[82vw] bg-white/98 backdrop-blur-md border-r border-slate-200/90 flex flex-col justify-between transition-transform duration-200 lg:translate-x-0 lg:static lg:w-64 shrink-0 shadow-xs overflow-y-auto ${
           mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
         }`}
       >
@@ -305,8 +408,28 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Bottom User & Offline/Online Sync Status */}
+        {/* Bottom User, Download App & Offline/Online Sync Status */}
         <div className="p-4 border-t border-slate-100 space-y-3">
+          {/* Download / Install App Card */}
+          <button
+            type="button"
+            onClick={() => {
+              setMobileMenuOpen(false);
+              if (deferredInstallPrompt) {
+                handleTriggerNativeInstall();
+              } else {
+                setInstallModalOpen(true);
+              }
+            }}
+            className="w-full p-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-700 hover:to-indigo-700 text-white text-xs font-bold flex items-center justify-between shadow-xs transition cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Smartphone className="w-4 h-4 text-amber-300 shrink-0" />
+              <span>{isAppInstalled ? 'App Installed (Guide)' : 'Download Mobile / PC App'}</span>
+            </span>
+            <Download className="w-4 h-4 shrink-0" />
+          </button>
+
           <div
             onClick={() => setSyncModalOpen(true)}
             className={`p-3 rounded-xl border text-[11px] cursor-pointer transition ${
@@ -360,23 +483,36 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Desktop Bar */}
-        <header className="bg-white/90 backdrop-blur-md border-b border-slate-200/90 px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 shadow-2xs">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">
+        <header className="bg-white/90 backdrop-blur-md border-b border-slate-200/90 px-3 sm:px-6 py-2.5 sm:py-3.5 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-20 shadow-2xs">
+          <div className="min-w-0">
+            <h2 className="text-sm sm:text-base font-bold text-slate-900 truncate">
               {NAV_ITEMS.find((n) => n.id === activeTab)?.label || 'Vestas Pharmaceuticals'}
             </h2>
-            <p className="text-xs text-slate-500">
+            <p className="text-[11px] sm:text-xs text-slate-500 truncate">
               {settings.business_name || 'Vestas Pharmaceuticals'} • Governorpet, Vijayawada •
               GSTIN: {settings.gstin || '37BHCPS0456G1ZB'}
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Download App Button on Desktop/Tablet */}
+            <button
+              type="button"
+              onClick={() =>
+                deferredInstallPrompt ? handleTriggerNativeInstall() : setInstallModalOpen(true)
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 text-xs font-bold transition cursor-pointer"
+              title="Download Mobile & PC App"
+            >
+              <Download className="w-3.5 h-3.5 text-indigo-600" />
+              <span>{isAppInstalled ? 'App Guide' : 'Download App'}</span>
+            </button>
+
             {/* Online / Offline Mode & Queue Status Button */}
             <button
               type="button"
               onClick={() => setSyncModalOpen(true)}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
                 isOffline
                   ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-800'
                   : pendingQueue.length > 0
@@ -387,17 +523,17 @@ export default function App() {
               {isOffline ? (
                 <>
                   <WifiOff className="w-3.5 h-3.5 text-amber-600" />
-                  Offline Mode ({pendingQueue.length} Queued)
+                  <span className="hidden sm:inline">Offline Mode</span> ({pendingQueue.length})
                 </>
               ) : pendingQueue.length > 0 ? (
                 <>
                   <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-                  Sync Pending ({pendingQueue.length})
+                  Sync ({pendingQueue.length})
                 </>
               ) : (
                 <>
                   <Wifi className="w-3.5 h-3.5 text-emerald-600" />
-                  Online & Synced
+                  <span className="hidden sm:inline">Online & Synced</span>
                 </>
               )}
             </button>
@@ -406,10 +542,11 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab('inventory')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-xs font-semibold transition cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-xs font-semibold transition cursor-pointer"
               >
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                {alertCount} Stock Alert(s)
+                <span>{alertCount}</span>
+                <span className="hidden sm:inline">Alert(s)</span>
               </button>
             )}
 
@@ -417,10 +554,10 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab('billing')}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
               >
                 <PlusCircle className="w-4 h-4" />
-                New Customer Bill
+                <span>New Bill</span>
               </button>
             )}
           </div>
@@ -428,7 +565,7 @@ export default function App() {
 
         {/* Notification Banner when Offline or Just Synchronized */}
         {syncBannerMessage && (
-          <div className="mx-4 sm:mx-6 mt-4 p-3 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center justify-between shadow-sm">
+          <div className="mx-3 sm:mx-6 mt-3 p-3 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center justify-between shadow-sm">
             <span>✓ {syncBannerMessage}</span>
             <button
               type="button"
@@ -440,7 +577,7 @@ export default function App() {
           </div>
         )}
 
-        <main className="p-4 sm:p-6 max-w-[1600px] w-full mx-auto flex-1">
+        <main className="p-2.5 sm:p-6 max-w-[1600px] w-full mx-auto flex-1">
           {activeTab === 'dashboard' && (
             <DashboardView
               dashboard={dashboard}
@@ -508,6 +645,43 @@ export default function App() {
         </main>
       </div>
 
+      {/* Mobile Bottom Thumb-Friendly Navigation Bar */}
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 px-1.5 py-1 flex items-center justify-around shadow-lg safe-area-bottom">
+        {mobileBottomItems.map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => {
+                setActiveTab(item.id);
+                setMobileMenuOpen(false);
+              }}
+              className={`relative flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 transition cursor-pointer ${
+                isActive ? 'text-sky-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <div
+                className={`p-1 rounded-lg transition ${
+                  isActive ? 'bg-sky-100/80 text-sky-700' : ''
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight truncate max-w-[64px]">
+                {item.shortLabel || item.label}
+              </span>
+              {item.id === 'inventory' && alertCount > 0 && (
+                <span className="absolute top-1 right-2 w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
+                  {alertCount > 9 ? '9+' : alertCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
       {/* Invoice Print & PDF Modal */}
       {selectedInvoice && (
         <InvoiceModal
@@ -528,6 +702,15 @@ export default function App() {
         syncHistory={syncHistory}
         syncing={syncing}
         onSyncNow={handleRunSync}
+      />
+
+      {/* Download / Install Mobile & Desktop App Modal */}
+      <InstallAppModal
+        isOpen={installModalOpen}
+        onClose={() => setInstallModalOpen(false)}
+        canNativeInstall={!!deferredInstallPrompt}
+        isInstalled={isAppInstalled}
+        onTriggerNativeInstall={handleTriggerNativeInstall}
       />
     </div>
   );

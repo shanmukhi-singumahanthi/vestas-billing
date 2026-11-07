@@ -45,6 +45,19 @@
   background: #94a3b8;
 }
 
+/* Mobile Safe-Area & Viewport Optimizations */
+.safe-area-bottom {
+  padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
+}
+
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important; /* Prevents iOS/Android auto-zoom on input focus */
+  }
+}
+
 /* Dedicated Print Styles for Physical Printers (A4 & Thermal 80mm) */
 @media print {
   body * {

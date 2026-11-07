@@ -513,32 +513,32 @@ export default function BillingView({
   };
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+    <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 sm:gap-6 items-start">
       {/* LEFT PANEL: Multi-Batch Medicine Search & Manual Entry (5 cols on XL) */}
-      <div className="xl:col-span-5 bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden flex flex-col max-h-[860px]">
-        <div className="p-4 border-b border-slate-200 bg-slate-50/70">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-sky-600" />
-              Select Medicine Batch ({filteredProducts.length})
+      <div className="xl:col-span-5 bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden flex flex-col max-h-[420px] sm:max-h-[560px] xl:max-h-[860px]">
+        <div className="p-3 sm:p-4 border-b border-slate-200 bg-slate-50/70">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 sm:mb-3">
+            <h3 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5">
+              <Layers className="w-4 h-4 text-sky-600 shrink-0" />
+              <span>Select Medicine ({filteredProducts.length})</span>
             </h3>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => setShowBillScanner(true)}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-700 hover:to-sky-700 text-white text-xs font-bold transition cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-700 hover:to-sky-700 text-white text-[11px] sm:text-xs font-bold transition cursor-pointer"
                 title="Scan Bill Image & Inward Batches"
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                Scan Bill Image
+                <span>Scan Bill</span>
               </button>
               <button
                 type="button"
                 onClick={() => setShowManualEntry(!showManualEntry)}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] sm:text-xs font-bold transition cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
-                {showManualEntry ? 'Close' : 'Manual Entry'}
+                <span>{showManualEntry ? 'Close' : 'Manual'}</span>
               </button>
             </div>
           </div>
@@ -795,19 +795,18 @@ export default function BillingView({
       {/* RIGHT PANEL: Active POS Bill & Checkout (7 cols on XL) */}
       <div className="xl:col-span-7 bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden flex flex-col">
         {/* Bill Header */}
-        <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+        <div className="px-3.5 sm:px-5 py-3 sm:py-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center">
-              <ShoppingBag className="w-5 h-5" />
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0">
+              <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-sm sm:text-base font-bold text-slate-900">
                 New Customer Bill / Tax Invoice
               </h3>
-              <p className="text-xs text-slate-500">
+              <p className="text-[11px] sm:text-xs text-slate-500">
                 Auto Invoice No:{' '}
-                <span className="font-bold text-sky-700">{nextInvoiceNo}</span> • All fields
-                support direct manual typing
+                <span className="font-bold text-sky-700">{nextInvoiceNo}</span>
               </p>
             </div>
           </div>
@@ -817,23 +816,23 @@ export default function BillingView({
               type="button"
               onClick={handlePreviewDraftBill}
               disabled={cart.length === 0}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 disabled:opacity-50 transition cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 disabled:opacity-50 transition cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5" />
-              Preview Bill
+              <span>Preview</span>
             </button>
             <button
               type="button"
               onClick={clearBill}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-200/70 transition cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-200/70 transition cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              Reset
+              <span>Reset</span>
             </button>
           </div>
         </div>
 
-        <div className="p-5 space-y-5">
+        <div className="p-3 sm:p-5 space-y-4 sm:space-y-5">
           {error && (
             <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-red-700">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />

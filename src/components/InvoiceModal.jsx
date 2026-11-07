@@ -192,78 +192,78 @@ export default function InvoiceModal({ invoice, settings = {}, onClose }) {
   const totalItemsCount = (invoice.items || []).length;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[96vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-1.5 sm:p-4 md:p-6 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[96dvh] flex flex-col overflow-hidden">
         {/* Top Action Bar (Hidden during printing) */}
-        <div className="no-print px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+        <div className="no-print px-3 sm:px-5 py-2.5 sm:py-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
               <CheckCircle2 className="w-3.5 h-3.5" />
-              Invoice {invoice.invoice_number}
+              <span>{invoice.invoice_number}</span>
             </span>
 
             {/* Layout selector tabs */}
-            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 overflow-x-auto max-w-full">
               <button
                 type="button"
                 onClick={() => setLayout('WHOLESALE')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] sm:text-xs font-medium transition shrink-0 cursor-pointer ${
                   layout === 'WHOLESALE'
                     ? 'bg-sky-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 <Stamp className="w-3.5 h-3.5" />
-                Wholesale GST (Official)
+                <span>Wholesale GST</span>
               </button>
               <button
                 type="button"
                 onClick={() => setLayout('A4')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] sm:text-xs font-medium transition shrink-0 cursor-pointer ${
                   layout === 'A4'
                     ? 'bg-sky-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
-                Retail A4
+                <span>Retail A4</span>
               </button>
               <button
                 type="button"
                 onClick={() => setLayout('THERMAL')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] sm:text-xs font-medium transition shrink-0 cursor-pointer ${
                   layout === 'THERMAL'
                     ? 'bg-sky-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 <Receipt className="w-3.5 h-3.5" />
-                Thermal (80mm)
+                <span>Thermal (80mm)</span>
               </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={handleDownloadPdf}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition cursor-pointer"
             >
               <Download className="w-4 h-4" />
-              Download PDF
+              <span>PDF</span>
             </button>
             <button
               type="button"
               onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white shadow-xs transition cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white shadow-xs transition cursor-pointer"
             >
               <Printer className="w-4 h-4" />
-              Print Invoice
+              <span>Print</span>
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition cursor-pointer"
+              className="p-1.5 sm:p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition cursor-pointer"
               title="Close"
             >
               <X className="w-5 h-5" />
@@ -272,7 +272,7 @@ export default function InvoiceModal({ invoice, settings = {}, onClose }) {
         </div>
 
         {/* Printable Invoice Container */}
-        <div className="p-3 sm:p-6 overflow-y-auto bg-slate-100/70 flex justify-center">
+        <div className="p-2 sm:p-6 overflow-auto bg-slate-100/70 flex justify-start sm:justify-center">
           {layout === 'THERMAL' ? (
             /* 80mm Thermal Receipt Layout */
             <div
