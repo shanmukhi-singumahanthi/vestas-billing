@@ -12,7 +12,9 @@ import {
   Eye,
   Edit3,
   Layers,
+  Sparkles,
 } from 'lucide-react';
+import BillScannerModal from './BillScannerModal';
 import { apiRequest } from '../utils/api';
 import { formatCurrency } from '../utils/exportAndPdf';
 
@@ -44,6 +46,8 @@ export default function BillingView({
 
   // Cart items
   const [cart, setCart] = useState([]);
+
+  const [showBillScanner, setShowBillScanner] = useState(false);
 
   // Manual Medicine / New Batch Entry Form inside Billing
   const [showManualEntry, setShowManualEntry] = useState(false);
@@ -189,6 +193,7 @@ export default function BillingView({
           pack_size: product.pack_size || '',
           available_stock: availStock,
           quantity: 1,
+          free_quantity: 0,
           purchase_price: Number(product.purchase_price || 0),
           mrp: Number(product.mrp || product.selling_price),
           unit_price: Number(product.selling_price),
@@ -296,6 +301,10 @@ export default function BillingView({
           }
           return { ...item, quantity: val };
         }
+        if (field === 'free_quantity') {
+          const val = parseInt(value, 10);
+          return { ...item, free_quantity: isNaN(val) || val < 0 ? 0 : val };
+        }
         if (field === 'unit_price' || field === 'mrp' || field === 'purchase_price') {
           const val = parseFloat(value);
           return { ...item, [field]: isNaN(val) || val < 0 ? 0 : val };
@@ -402,6 +411,10 @@ export default function BillingView({
         : grandTotal;
 
     const balanceDue = Math.max(0, +(grandTotal - effectivePaid).toFixed(2));
+    const totalUnits = cart.reduce(
+      (sum, it) => sum + (Number(it.quantity) || 0) + (Number(it.free_quantity) || 0),
+      0
+    );
 
     return {
       computedItems,
@@ -412,6 +425,7 @@ export default function BillingView({
       grandTotal,
       effectivePaid,
       balanceDue,
+      totalUnits,
     };
   }, [cart, enableGst, taxInclusive, discountType, discountValue, customAmountPaid, paymentMethod]);
 
@@ -508,14 +522,25 @@ export default function BillingView({
               <Layers className="w-4 h-4 text-sky-600" />
               Select Medicine Batch ({filteredProducts.length})
             </h3>
-            <button
-              type="button"
-              onClick={() => setShowManualEntry(!showManualEntry)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              {showManualEntry ? 'Close Manual Form' : 'Manual Medicine / Batch'}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setShowBillScanner(true)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-700 hover:to-sky-700 text-white text-xs font-bold transition cursor-pointer"
+                title="Scan Bill Image & Inward Batches"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                Scan Bill Image
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowManualEntry(!showManualEntry)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {showManualEntry ? 'Close' : 'Manual Entry'}
+              </button>
+            </div>
           </div>
 
           {/* Manual Medicine / New Batch Entry Form */}
@@ -999,7 +1024,8 @@ export default function BillingView({
                       Medicine Name
                     </th>
                     <th className="py-2.5 px-2 font-semibold w-28">Batch & Exp</th>
-                    <th className="py-2.5 px-1.5 font-semibold text-center w-16">Qty</th>
+                    <th className="py-2.5 px-1 font-semibold text-center w-14">Qty</th>
+                    <th className="py-2.5 px-1 font-semibold text-center w-14 text-emerald-700 bg-emerald-50">Free</th>
                     <th className="py-2.5 px-1.5 font-semibold text-right w-20">MRP</th>
                     <th className="py-2.5 px-1.5 font-semibold text-right w-22">
                       Rate ({symbol})
@@ -1055,7 +1081,7 @@ export default function BillingView({
                             className="w-24 px-1.5 py-0.5 text-[10px] text-slate-600 rounded border border-slate-200 focus:border-sky-600 outline-none"
                           />
                         </td>
-                        <td className="py-2 px-1.5 text-center">
+                        <td className="py-2 px-1 text-center">
                           <input
                             type="number"
                             min="1"
@@ -1064,7 +1090,18 @@ export default function BillingView({
                             onChange={(e) =>
                               updateCartItem(item.row_uid, 'quantity', e.target.value)
                             }
-                            className="w-14 px-1.5 py-1 text-center font-bold rounded-lg border border-slate-300 focus:border-sky-600 outline-none"
+                            className="w-12 px-1 py-1 text-center font-bold rounded-lg border border-slate-300 focus:border-sky-600 outline-none"
+                          />
+                        </td>
+                        <td className="py-2 px-1 text-center">
+                          <input
+                            type="number"
+                            min="0"
+                            value={item.free_quantity || 0}
+                            onChange={(e) =>
+                              updateCartItem(item.row_uid, 'free_quantity', e.target.value)
+                            }
+                            className="w-12 px-1 py-1 text-center font-bold rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-800 focus:border-emerald-600 outline-none"
                           />
                         </td>
                         <td className="py-2 px-1.5 text-right">
@@ -1312,6 +1349,15 @@ export default function BillingView({
           </div>
         </div>
       </div>
+
+      {/* Bill Scanner & Batch Inward Modal */}
+      {showBillScanner && (
+        <BillScannerModal
+          settings={settings}
+          onClose={() => setShowBillScanner(false)}
+          onStockUpdated={onRefresh}
+        />
+      )}
     </div>
   );
 }

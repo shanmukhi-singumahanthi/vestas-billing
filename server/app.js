@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getDb, resetToOfficialVestasCatalog } from './db.js';
+import { scanBillImage, inwardBillItems } from './billScanner.js';
 
 dotenv.config();
 
@@ -82,6 +83,43 @@ app.post('/api/catalog/reset-official', async (req, res) => {
   }
 });
 
+// Smart Bill Image OCR Scanner
+app.post('/api/inventory/scan-bill-image', authenticateToken, async (req, res) => {
+  try {
+    const { image, apiKey } = req.body || {};
+    if (!image) {
+      return res.status(400).json({ error: 'Image data (base64) is required.' });
+    }
+    const parsed = await scanBillImage(image, apiKey);
+    res.json(parsed);
+  } catch (err) {
+    console.error('Scan bill error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Inward Scanned Bill & Update Stock Batch-wise
+app.post('/api/inventory/inward-scanned-bill', authenticateToken, async (req, res) => {
+  try {
+    const { invoice_number, invoice_date, party, items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one medicine item is required to inward stock.' });
+    }
+    const db = await getDb();
+    const result = await inwardBillItems(db, {
+      invoice_number,
+      invoice_date,
+      party,
+      items,
+      performed_by: req.user.fullName || req.user.username || 'S. Satyendranath (Proprietor)',
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Inward bill error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 1. SINGLE OWNER AUTHENTICATION ROUTES
 // ==========================================
@@ -122,7 +160,16 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: err.message || 'Internal server error during login.' });
+    const rawMsg = err?.message || (typeof err === 'string' ? err : 'Internal server error during login.');
+    const isWaking = /timeout|Connection terminated|connection closed|ECONNRESET|ETIMEDOUT|suspended|57P01|57P03/i.test(rawMsg);
+    const userMessage = isWaking
+      ? 'Database was sleeping and is waking up (Neon serverless). Please wait 3 seconds and click Sign In again.'
+      : rawMsg;
+    res.status(500).json({
+      error: userMessage,
+      details: rawMsg,
+      isWaking,
+    });
   }
 });
 

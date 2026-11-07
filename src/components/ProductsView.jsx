@@ -13,7 +13,9 @@ import {
   X,
   IndianRupee,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react';
+import BillScannerModal from './BillScannerModal';
 import { apiRequest } from '../utils/api';
 import { idbReplaceAll } from '../utils/offlineDb';
 import {
@@ -71,6 +73,7 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
 
   // Delete Confirmation Modal
   const [deletingProduct, setDeletingProduct] = useState(null);
+  const [showBillScanner, setShowBillScanner] = useState(false);
 
   const fileInputRef = useRef(null);
 
@@ -377,6 +380,14 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
           >
             <Download className="w-4 h-4 text-emerald-600" />
             Export PDF
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowBillScanner(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-700 hover:to-sky-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+          >
+            <Sparkles className="w-4 h-4 text-amber-300" />
+            Scan Bill Image (Inward Stock)
           </button>
           <button
             type="button"
@@ -839,6 +850,14 @@ export default function ProductsView({ products = [], settings = {}, onRefresh }
             </div>
           </div>
         </div>
+      )}
+      {/* Bill Scanner & Batch Inward Modal */}
+      {showBillScanner && (
+        <BillScannerModal
+          settings={settings}
+          onClose={() => setShowBillScanner(false)}
+          onStockUpdated={onRefresh}
+        />
       )}
     </div>
   );

@@ -34,33 +34,70 @@ export async function getDb() {
 
       if (rawUrl) {
         const isSsl = process.env.DATABASE_SSL !== 'false';
+        
+        // Optimize for Neon / Serverless:
+        // Neon compute suspends (sleeps) when idle. When waking up, connections need extra timeout
+        // and background pool errors must be handled gracefully so the Node process doesn't crash.
         const pool = new pg.Pool({
           connectionString: rawUrl,
           ssl: isSsl ? { rejectUnauthorized: false } : false,
-          connectionTimeoutMillis: 15000, // Allow up to 15s for Neon compute to wake from suspended state
-          idleTimeoutMillis: 30000,
-          max: 10,
+          connectionTimeoutMillis: 25000, // Allow up to 25s for Neon compute to wake from SUSPENDED state
+          idleTimeoutMillis: 20000,
+          max: process.env.VERCEL ? 3 : 10, // Keep pool small in serverless
         });
 
-        dbInstance = {
-          query: (text, params) => pool.query(text, params),
-          exec: (text) => pool.query(text),
-          transaction: async (fn) => {
-            const client = await pool.connect();
+        // CRITICAL for Neon: When Neon suspends, it terminates idle connections.
+        // Without an error handler on the pool, node-pg causes unhandled exceptions that crash the process.
+        pool.on('error', (err) => {
+          console.warn('[Neon/Postgres Pool] Handled idle connection drop (normal during Neon compute suspension):', err?.message || err);
+        });
+
+        // Helper to run queries with automatic retry for Neon wake-up
+        const runWithRetry = async (fn, maxRetries = 3, delayMs = 1500) => {
+          let lastErr = null;
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-              await client.query('BEGIN');
-              const result = await fn({
-                query: (t, p) => client.query(t, p),
-                exec: (t) => client.query(t),
-              });
-              await client.query('COMMIT');
-              return result;
+              return await fn();
             } catch (err) {
-              await client.query('ROLLBACK');
+              lastErr = err;
+              const msg = err?.message || String(err);
+              const isNeonWaking = /timeout|Connection terminated|connection closed|ECONNRESET|ETIMEDOUT|57P01|57P03/i.test(msg);
+              if (isNeonWaking && attempt < maxRetries) {
+                console.log(`[Neon Wake-up] Database is unsuspending... attempt ${attempt}/${maxRetries} failed. Retrying in ${delayMs}ms...`);
+                await new Promise((res) => setTimeout(res, delayMs * attempt));
+                continue;
+              }
               throw err;
-            } finally {
-              client.release();
             }
+          }
+          throw lastErr;
+        };
+
+        dbInstance = {
+          query: (text, params) => runWithRetry(() => pool.query(text, params)),
+          exec: (text) => runWithRetry(() => pool.query(text)),
+          transaction: async (fn) => {
+            return await runWithRetry(async () => {
+              const client = await pool.connect();
+              try {
+                await client.query('BEGIN');
+                const result = await fn({
+                  query: (t, p) => client.query(t, p),
+                  exec: (t) => client.query(t),
+                });
+                await client.query('COMMIT');
+                return result;
+              } catch (err) {
+                try {
+                  await client.query('ROLLBACK');
+                } catch {
+                  // Client might be dead if connection dropped
+                }
+                throw err;
+              } finally {
+                client.release();
+              }
+            });
           },
         };
       } else if (process.env.VERCEL) {
@@ -70,8 +107,26 @@ export async function getDb() {
       } else {
         const { PGlite } = await import('@electric-sql/pglite');
         const pgDataPath = path.join(dataDir, 'pgdata');
-        const pglite = new PGlite(pgDataPath);
-        await pglite.waitReady;
+        
+        // Clean up stale postmaster.pid lock file if process was terminated abruptly
+        try {
+          const pidFile = path.join(pgDataPath, 'postmaster.pid');
+          if (fs.existsSync(pidFile)) {
+            fs.unlinkSync(pidFile);
+          }
+        } catch {
+          // ignore
+        }
+
+        let pglite;
+        try {
+          pglite = new PGlite(pgDataPath);
+          await pglite.waitReady;
+        } catch (pgErr) {
+          console.warn('PGlite on-disk load failed, falling back to in-memory store:', pgErr?.message || pgErr);
+          pglite = new PGlite();
+          await pglite.waitReady;
+        }
 
         dbInstance = {
           query: (text, params) => pglite.query(text, params),
@@ -277,6 +332,18 @@ async function initializeSchema(db) {
     ALTER TABLE products ADD COLUMN IF NOT EXISTS client_uid VARCHAR(120);
     ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_invoice_uid VARCHAR(120);
     ALTER TABLE invoices ADD COLUMN IF NOT EXISTS synced_from_offline BOOLEAN DEFAULT FALSE;
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS invoice_type VARCHAR(50) DEFAULT 'Credit';
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS transport VARCHAR(150) DEFAULT '';
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS lr_number VARCHAR(100) DEFAULT '';
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS lr_date VARCHAR(50) DEFAULT '';
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS total_units INT DEFAULT 0;
+    ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS free_quantity INT DEFAULT 0;
+    ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS ptr NUMERIC(12,2) DEFAULT 0.00;
+    ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS mfg VARCHAR(100) DEFAULT '';
+    ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS cgst_percent NUMERIC(5,2) DEFAULT 0.00;
+    ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS cgst_amount NUMERIC(12,2) DEFAULT 0.00;
+    ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS sgst_percent NUMERIC(5,2) DEFAULT 0.00;
+    ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS sgst_amount NUMERIC(12,2) DEFAULT 0.00;
     ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS client_operation_id VARCHAR(120);
   `);
 
@@ -292,7 +359,14 @@ async function initializeSchema(db) {
     );
   }
 
-  // Seed default Vestas Pharmaceuticals settings if empty
+  // Seed / Sync official Vestas Pharmaceuticals settings matching the official printed bill
+  const officialAddress = 'dr.no:28-1-64, 1st floor, elururoad, VIJAYAWADA';
+  const officialPhone = '0866-3569652, 9603033345';
+  const officialDl1 = '20B-AP/20/04/2024/4838';
+  const officialDl2 = '21B-AP/20/04/2024/4838';
+  const officialGstin = '37BHCPS0456G1ZB';
+  const officialTerms = '1. The goods supplied in this invoice do not contravene section 18 of the drugs & cosmetics act 1940.\n2. Goods once sold will not be taken back or exchanged.\n3. Refrigerated & expiry medicines are strictly non-returnable.\n4. E.&O.E. All disputes subject to VIJAYAWADA Jurisdiction.';
+
   const settingsCheck = await db.query('SELECT COUNT(*) as count FROM settings');
   if (Number(settingsCheck.rows[0].count) === 0) {
     await db.query(
@@ -302,39 +376,46 @@ async function initializeSchema(db) {
         enable_gst, tax_inclusive, currency_symbol, low_stock_threshold, terms_and_conditions
       ) VALUES (
         1, $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        'VP-', 1001, 'A4', 12.00,
+        'DRV', 1001, 'A4', 12.00,
         TRUE, FALSE, '₹', 25, $10
       )`,
       [
         'VESTAS PHARMACEUTICALS',
         'S. SATYENDRANATH (Singumahanthi Satyendra Nath)',
         'Pharmaceutical Distributors, Wholesale & Retail Chemists',
-        '27-18-92/A, 1st Floor, Ganesh Complex, Congress Office Road, Governorpet, Vijayawada, Andhra Pradesh - 520002',
-        '9603033345',
+        officialAddress,
+        officialPhone,
         'ssatyendranth@gmail.com',
-        '37BHCPS0456G1ZB',
-        'AP/VJA/20B/104928',
-        'AP/VJA/21B/104929',
-        '1. Goods once sold will not be taken back or exchanged without valid invoice.\n2. Refrigerated & expiry medicines are strictly non-returnable.\n3. All disputes are subject to Vijayawada jurisdiction only.'
+        officialGstin,
+        officialDl1,
+        officialDl2,
+        officialTerms,
       ]
+    );
+  } else {
+    // Keep settings synchronized with official bill details
+    await db.query(
+      `UPDATE settings SET
+        address = $1,
+        phone = $2,
+        dl_no_1 = $3,
+        dl_no_2 = $4,
+        gstin = $5,
+        terms_and_conditions = $6
+      WHERE id = 1`,
+      [officialAddress, officialPhone, officialDl1, officialDl2, officialGstin, officialTerms]
     );
   }
 
   // Clean state: ensure no dummy customers exist
   // Customers will be added directly by the owner for real clients/chemists
 
-  // Ensure the full 27 official Vestas catalog is loaded, and dummy invoices/customers are eliminated
+  // Seed the full 27 official Vestas catalog if not already populated
   const vestasCheck = await db.query(
     "SELECT COUNT(*) as count FROM products WHERE name IN ('BONEHEAL-D3', 'CAPIDOL', 'CEFSTAS inj', 'MOXIVEST-CV')"
   );
-  const invCheck = await db.query("SELECT COUNT(*) as count FROM invoices");
-  const custCheck = await db.query("SELECT COUNT(*) as count FROM customers");
 
-  if (
-    Number(vestasCheck.rows[0].count) < 4 ||
-    Number(invCheck.rows[0].count) > 0 ||
-    Number(custCheck.rows[0].count) > 0
-  ) {
+  if (Number(vestasCheck.rows[0].count) < 4) {
     await resetToOfficialVestasCatalog(db);
   }
 }

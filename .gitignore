@@ -17,5 +17,6 @@ data/pgdata/
 secrets/
 credentials*.json
 *.log
+*.traineddata
 .DS_Store
 Thumbs.db

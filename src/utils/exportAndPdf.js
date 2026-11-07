@@ -319,9 +319,9 @@ export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
     'Batch',
     'Expiry',
     'Qty',
+    'Free',
     'MRP',
     'Rate',
-    'Disc%',
     'GST%',
     'Total (Rs.)'
   ];
@@ -334,9 +334,9 @@ export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
     item.batch_number || '-',
     item.expiry_date || '-',
     item.quantity,
+    item.free_quantity !== undefined && Number(item.free_quantity) > 0 ? Number(item.free_quantity).toFixed(1) : '0.0',
     Number(item.mrp || 0).toFixed(2),
     Number(item.unit_price || 0).toFixed(2),
-    Number(item.item_discount_percent || 0) > 0 ? `${Number(item.item_discount_percent)}%` : '-',
     `${Number(item.gst_percentage || 0)}%`,
     Number(item.line_total || 0).toFixed(2)
   ]);
@@ -361,15 +361,15 @@ export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
     },
     columnStyles: {
       0: { cellWidth: 8, halign: 'center' },
-      1: { cellWidth: 42 },
-      2: { cellWidth: 16 },
-      3: { cellWidth: 14 },
-      4: { cellWidth: 18 },
-      5: { cellWidth: 16 },
+      1: { cellWidth: 40 },
+      2: { cellWidth: 14 },
+      3: { cellWidth: 12 },
+      4: { cellWidth: 16 },
+      5: { cellWidth: 14 },
       6: { cellWidth: 10, halign: 'center' },
-      7: { cellWidth: 14, halign: 'right' },
+      7: { cellWidth: 10, halign: 'center' },
       8: { cellWidth: 14, halign: 'right' },
-      9: { cellWidth: 11, halign: 'right' },
+      9: { cellWidth: 14, halign: 'right' },
       10: { cellWidth: 11, halign: 'right' },
       11: { cellWidth: 18, halign: 'right', fontStyle: 'bold' }
     }
@@ -463,16 +463,31 @@ export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
     sumY += 5;
   }
 
+  // Blue Wholesale Verification Stamps (matching official printed bill)
+  doc.setDrawColor(37, 99, 235);
+  doc.setTextColor(37, 99, 235);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.roundedRect(14, signY - 8, 38, 14, 1, 1, 'D');
+  doc.text('CHECKED', 33, signY - 2, { align: 'center' });
+  doc.text('VERIFIED', 33, signY + 3.5, { align: 'center' });
+
+  doc.roundedRect(56, signY - 8, 48, 14, 1, 1, 'D');
+  doc.text('DELIVERED', 80, signY - 2, { align: 'center' });
+  doc.setFontSize(7);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Dt..................Sign.', 80, signY + 3.5, { align: 'center' });
+
   // Authorized Signatory
-  const signY = Math.max(sumY + 14, finalY + 38);
+  const signYPos = Math.max(sumY + 14, finalY + 38);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
-  doc.text(`For ${bizName}`, 196, signY, { align: 'right' });
+  doc.text(`For ${bizName}`, 196, signYPos, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
-  doc.text('Authorized Signatory', 196, signY + 10, { align: 'right' });
+  doc.text('Authorized Signatory', 196, signYPos + 10, { align: 'right' });
 
   doc.save(`${invoice.invoice_number}_Vestas_Invoice.pdf`);
 }

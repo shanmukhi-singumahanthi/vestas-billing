@@ -20,12 +20,15 @@ export default function LoginView({ onLoginSuccess }) {
   const [password, setPassword] = useState('vestas123');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isRetrying, setIsRetrying] = useState(false);
   const offline = isBrowserOffline();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (e, isAutoRetry = false) => {
+    if (e && e.preventDefault) e.preventDefault();
     setError('');
     setLoading(true);
+    if (isAutoRetry) setIsRetrying(true);
+
     try {
       const res = await apiRequest('/api/auth/login', {
         method: 'POST',
@@ -34,9 +37,21 @@ export default function LoginView({ onLoginSuccess }) {
       setAuthToken(res.token);
       onLoginSuccess(res.user);
     } catch (err) {
-      setError(err.message || 'Login failed. Please check your owner credentials.');
+      const msg = err.message || '';
+      const isWaking = /waking up|suspended|timeout|Connection terminated|connection closed|57P01|57P03|ECONNRESET/i.test(msg);
+
+      if (isWaking && !isAutoRetry) {
+        setError('Neon serverless database was sleeping and is waking up. Automatically retrying in 2 seconds...');
+        setTimeout(() => {
+          handleSubmit(null, true);
+        }, 2200);
+        return;
+      }
+
+      setError(msg || 'Login failed. Please check your owner credentials or database connection.');
     } finally {
       setLoading(false);
+      setIsRetrying(false);
     }
   };
 
@@ -117,9 +132,30 @@ export default function LoginView({ onLoginSuccess }) {
             </div>
 
             {error && (
-              <div className="mb-5 p-3.5 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-red-700">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                <span>{error}</span>
+              <div
+                className={`mb-5 p-3.5 rounded-xl border flex items-start gap-2.5 text-xs ${
+                  error.includes('waking up')
+                    ? 'bg-amber-50 border-amber-200 text-amber-800'
+                    : 'bg-red-50 border-red-200 text-red-700'
+                }`}
+              >
+                <AlertCircle
+                  className={`w-4 h-4 shrink-0 mt-0.5 ${
+                    error.includes('waking up') ? 'text-amber-600 animate-spin' : 'text-red-600'
+                  }`}
+                />
+                <div className="flex-1">
+                  <span>{error}</span>
+                  {!isRetrying && (
+                    <button
+                      type="button"
+                      onClick={() => handleSubmit(null, false)}
+                      className="mt-2 block text-[11px] font-bold underline hover:opacity-80 cursor-pointer"
+                    >
+                      Click here to Retry Now
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
