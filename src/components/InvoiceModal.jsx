@@ -9,79 +9,37 @@ import {
 } from '../utils/exportAndPdf';
 
 export function VestasLogo({ logoUrl, size = 'md', variant = 'mark' }) {
-  if (logoUrl) {
-    return (
-      <img
-        src={logoUrl}
-        alt="Vestas Pharmaceuticals Logo"
-        className={size === 'lg' ? 'h-14 w-auto object-contain' : 'h-10 w-auto object-contain'}
-      />
-    );
-  }
+  const effectiveUrl = logoUrl || '/logo.png';
 
   if (variant === 'full') {
     const scaleClass =
-      size === 'lg' ? 'w-48 h-auto' : size === 'sm' ? 'w-32 h-auto' : 'w-40 h-auto';
+      size === 'lg'
+        ? 'h-16 w-auto max-w-[220px]'
+        : size === 'sm'
+        ? 'h-9 w-auto max-w-[140px]'
+        : 'h-12 w-auto max-w-[180px]';
+
     return (
-      <div className="inline-flex flex-col select-none">
-        <svg
-          viewBox="0 0 240 105"
-          className={scaleClass}
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          {/* Grey lower V-chevron */}
-          <polygon points="140,14 218,14 179,50" fill="#73787C" />
-          {/* White cutout to create the V-chevron and gap */}
-          <polygon points="146,11 212,11 179,41.5" fill="#FFFFFF" />
-          {/* Vermilion Red upper solid inverted triangle */}
-          <polygon points="140,6 218,6 179,40" fill="#D63B24" />
-
-          {/* "v e s t a s" lowercase wide-tracked typography */}
-          <text
-            x="118"
-            y="77"
-            textAnchor="middle"
-            fill="#1E242B"
-            fontFamily="Inter, 'Segoe UI', Arial, sans-serif"
-            fontWeight="600"
-            fontSize="36"
-            letterSpacing="8"
-          >
-            vestas
-          </text>
-
-          {/* "PHARMACEUTICALS" uppercase wide-tracked subtext */}
-          <text
-            x="119"
-            y="97"
-            textAnchor="middle"
-            fill="#2C333A"
-            fontFamily="Inter, 'Segoe UI', Arial, sans-serif"
-            fontWeight="500"
-            fontSize="12.5"
-            letterSpacing="2.4"
-          >
-            PHARMACEUTICALS
-          </text>
-        </svg>
+      <div className="inline-flex items-center select-none">
+        <img
+          src={effectiveUrl}
+          alt="Vestas Pharmaceuticals Logo"
+          className={`${scaleClass} object-contain rounded-md`}
+        />
       </div>
     );
   }
 
-  const dims = size === 'lg' ? 'w-12 h-12' : 'w-10 h-10';
+  const dims = size === 'lg' ? 'w-14 h-14' : size === 'sm' ? 'w-8 h-8' : 'w-10 h-10';
   return (
     <div
-      className={`${dims} rounded-xl bg-white border border-slate-200/90 flex items-center justify-center shadow-xs shrink-0`}
+      className={`${dims} rounded-xl bg-white border border-slate-200/90 p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden`}
     >
-      <svg viewBox="0 0 64 54" className="w-8 h-7" fill="none">
-        {/* Grey lower V-chevron */}
-        <polygon points="6,14 58,14 32,46" fill="#73787C" />
-        {/* White gap cutout */}
-        <polygon points="11,11 53,11 32,37.5" fill="#FFFFFF" />
-        {/* Vermilion Red upper solid triangle */}
-        <polygon points="6,6 58,6 32,35.5" fill="#D63B24" />
-      </svg>
+      <img
+        src={effectiveUrl}
+        alt="Vestas Logo"
+        className="w-full h-full object-contain select-none"
+      />
     </div>
   );
 }

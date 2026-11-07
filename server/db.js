@@ -372,11 +372,11 @@ async function initializeSchema(db) {
     await db.query(
       `INSERT INTO settings (
         id, business_name, owner_name, tagline, address, phone, email, gstin, dl_no_1, dl_no_2,
-        invoice_prefix, next_invoice_number, default_invoice_format, default_gst_rate,
+        logo_url, invoice_prefix, next_invoice_number, default_invoice_format, default_gst_rate,
         enable_gst, tax_inclusive, currency_symbol, low_stock_threshold, terms_and_conditions
       ) VALUES (
         1, $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        'DRV', 1001, 'A4', 12.00,
+        '/logo.png', 'DRV', 1001, 'A4', 12.00,
         TRUE, FALSE, '₹', 25, $10
       )`,
       [
@@ -393,7 +393,7 @@ async function initializeSchema(db) {
       ]
     );
   } else {
-    // Keep settings synchronized with official bill details
+    // Keep settings synchronized with official bill details and logo
     await db.query(
       `UPDATE settings SET
         address = $1,
@@ -401,7 +401,8 @@ async function initializeSchema(db) {
         dl_no_1 = $3,
         dl_no_2 = $4,
         gstin = $5,
-        terms_and_conditions = $6
+        terms_and_conditions = $6,
+        logo_url = '/logo.png'
       WHERE id = 1`,
       [officialAddress, officialPhone, officialDl1, officialDl2, officialGstin, officialTerms]
     );
