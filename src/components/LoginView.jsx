@@ -16,12 +16,25 @@ import { apiRequest, setAuthToken } from '../utils/api';
 import { isBrowserOffline } from '../utils/offlineDb';
 
 export default function LoginView({ onLoginSuccess }) {
+  const [roleTab, setRoleTab] = useState('owner'); // 'owner' | 'worker'
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('vestas123');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [isRetrying, setIsRetrying] = useState(false);
   const offline = isBrowserOffline();
+
+  const handleRoleTabChange = (role) => {
+    setRoleTab(role);
+    setError('');
+    if (role === 'owner') {
+      setUsername('admin');
+      setPassword('vestas123');
+    } else {
+      setUsername('staff');
+      setPassword('staff123');
+    }
+  };
 
   const handleSubmit = async (e, isAutoRetry = false) => {
     if (e && e.preventDefault) e.preventDefault();
@@ -48,7 +61,7 @@ export default function LoginView({ onLoginSuccess }) {
         return;
       }
 
-      setError(msg || 'Login failed. Please check your owner credentials or database connection.');
+      setError(msg || 'Login failed. Please check credentials or database connection.');
     } finally {
       setLoading(false);
       setIsRetrying(false);
@@ -117,15 +130,62 @@ export default function LoginView({ onLoginSuccess }) {
         {/* Right Sign-In Form Panel */}
         <div className="lg:col-span-7 p-7 sm:p-10 bg-white flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-6">
+            {/* Role Portal Selector Tabs */}
+            <div className="flex rounded-2xl bg-slate-100 p-1 mb-6 border border-slate-200/80">
+              <button
+                type="button"
+                onClick={() => handleRoleTabChange('owner')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                  roleTab === 'owner'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Crown className="w-3.5 h-3.5 text-amber-600" />
+                Proprietor / Owner
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRoleTabChange('worker')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                  roleTab === 'worker'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <User className="w-3.5 h-3.5 text-sky-600" />
+                Counter Staff / Chemist
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between mb-5">
               <div>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-sky-50 text-sky-800 border border-sky-200 mb-2">
-                  <Crown className="w-3.5 h-3.5 text-amber-600" />
-                  Single Owner Authentication
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border mb-1.5 ${
+                    roleTab === 'owner'
+                      ? 'bg-amber-50 text-amber-900 border-amber-200'
+                      : 'bg-sky-50 text-sky-900 border-sky-200'
+                  }`}
+                >
+                  {roleTab === 'owner' ? (
+                    <>
+                      <Crown className="w-3.5 h-3.5 text-amber-600" />
+                      Proprietor Full Authority
+                    </>
+                  ) : (
+                    <>
+                      <User className="w-3.5 h-3.5 text-sky-600" />
+                      Staff Counter Access (Costs & Profits Hidden)
+                    </>
+                  )}
                 </span>
-                <h1 className="text-xl font-bold text-slate-900">Owner Sign In</h1>
+                <h1 className="text-xl font-bold text-slate-900">
+                  {roleTab === 'owner' ? 'Owner Sign In' : 'Counter Staff Sign In'}
+                </h1>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Authorized access for S. Satyendranath (Vestas Pharmaceuticals)
+                  {roleTab === 'owner'
+                    ? 'Authorized executive access for S. Satyendranath (Vestas Pharmaceuticals)'
+                    : 'Sales chemist terminal for retail & wholesale customer billing'}
                 </p>
               </div>
               <VestasLogo size="md" />
@@ -162,7 +222,7 @@ export default function LoginView({ onLoginSuccess }) {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Owner Username
+                  {roleTab === 'owner' ? 'Owner Username' : 'Staff Username'}
                 </label>
                 <div className="relative">
                   <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -172,14 +232,14 @@ export default function LoginView({ onLoginSuccess }) {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-sky-600 focus:ring-2 focus:ring-sky-100 outline-none transition"
-                    placeholder="Enter owner username"
+                    placeholder={roleTab === 'owner' ? 'Enter owner username' : 'Enter staff username'}
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Owner Password
+                  Password
                 </label>
                 <div className="relative">
                   <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -189,7 +249,7 @@ export default function LoginView({ onLoginSuccess }) {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-sky-600 focus:ring-2 focus:ring-sky-100 outline-none transition"
-                    placeholder="Enter owner password"
+                    placeholder="Enter password"
                   />
                 </div>
               </div>
@@ -197,9 +257,17 @@ export default function LoginView({ onLoginSuccess }) {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3 px-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 transition cursor-pointer mt-2 disabled:opacity-60"
+                className={`w-full py-3 px-4 rounded-xl text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 transition cursor-pointer mt-2 disabled:opacity-60 ${
+                  roleTab === 'owner'
+                    ? 'bg-sky-600 hover:bg-sky-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
               >
-                {loading ? 'Signing in...' : 'Sign In to Owner Dashboard'}
+                {loading
+                  ? 'Signing in...'
+                  : roleTab === 'owner'
+                  ? 'Sign In to Owner Dashboard'
+                  : 'Sign In to Counter Terminal'}
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>
@@ -219,7 +287,9 @@ export default function LoginView({ onLoginSuccess }) {
                 </>
               )}
             </span>
-            <span>Default Owner: admin / vestas123</span>
+            <span className="font-mono text-[11px] text-slate-600">
+              {roleTab === 'owner' ? 'Owner: admin / vestas123' : 'Staff: staff / staff123'}
+            </span>
           </div>
         </div>
       </div>

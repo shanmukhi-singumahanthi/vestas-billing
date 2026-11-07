@@ -11,6 +11,10 @@ import {
   CheckCircle2,
   X,
   Plus,
+  Users,
+  UserPlus,
+  Trash2,
+  Lock,
 } from 'lucide-react';
 import { apiRequest } from '../utils/api';
 import { formatDateTime } from '../utils/exportAndPdf';
@@ -677,74 +681,200 @@ export default function SettingsView({ settings = {}, onSettingsSaved, onFullRef
       )}
 
       {activeSection === 'security' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs max-w-xl">
-          <h3 className="text-base font-bold text-slate-900 mb-1">
-            Single Owner Account Security
-          </h3>
-          <p className="text-xs text-slate-500 mb-5">
-            Exclusive proprietor login for S. Satyendranath. Update your owner username, display
-            name, or password below.
-          </p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          {/* 1. Single Owner Account Security */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
+            <div className="flex items-center gap-2 mb-1">
+              <Shield className="w-5 h-5 text-amber-600" />
+              <h3 className="text-base font-bold text-slate-900">
+                Single Owner Account Security
+              </h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-5">
+              Exclusive proprietor login for S. Satyendranath. Update your owner username, display
+              name, or password below.
+            </p>
 
-          <form onSubmit={handleUpdateCredentials} className="space-y-4 text-xs">
+            <form onSubmit={handleUpdateCredentials} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Owner Display Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Owner Username</label>
+                <input
+                  type="text"
+                  required
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Current Password *
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Enter current password to confirm changes"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  New Password (leave blank to keep current)
+                </label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Enter new password"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold cursor-pointer"
+              >
+                Update Owner Security Credentials
+              </button>
+            </form>
+          </div>
+
+          {/* 2. Counter Staff & Chemist Accounts (Role: Worker) */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-6">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                Owner Display Name
-              </label>
-              <input
-                type="text"
-                required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-              />
+              <div className="flex items-center gap-2 mb-1">
+                <Users className="w-5 h-5 text-emerald-600" />
+                <h3 className="text-base font-bold text-slate-900">
+                  Counter Staff & Chemist Logins ({staffUsers.length})
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500">
+                Staff accounts have limited counter POS access. Wholesale purchase costs (PTS), profit margins, store settings, and report downloads are automatically hidden from staff.
+              </p>
             </div>
 
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Owner Username</label>
-              <input
-                type="text"
-                required
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-              />
+            {/* List Existing Staff */}
+            <div className="space-y-2.5">
+              <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Active Staff Accounts
+              </div>
+              {staffUsers.length === 0 ? (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center text-xs text-slate-400">
+                  No separate staff accounts created yet. Default staff login: <strong>staff</strong> / <strong>staff123</strong>.
+                </div>
+              ) : (
+                staffUsers.map((u) => (
+                  <div
+                    key={u.id}
+                    className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 flex items-center justify-between text-xs"
+                  >
+                    <div>
+                      <div className="font-bold text-slate-900 flex items-center gap-2">
+                        {u.full_name || u.username}
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          @{u.username}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        Counter Staff • POS & Invoices Only (Profits Hidden)
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm(`Delete staff account for "${u.username}"?`)) {
+                          handleDeleteStaffUser(u.id, u.username);
+                        }
+                      }}
+                      className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                      title="Remove Staff Account"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
 
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                Current Password *
-              </label>
-              <input
-                type="password"
-                required
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Enter current password to confirm changes"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-              />
-            </div>
+            {/* Add New Staff Account Form */}
+            <div className="pt-4 border-t border-slate-200">
+              <div className="text-xs font-bold text-slate-800 mb-3 flex items-center gap-1.5">
+                <UserPlus className="w-4 h-4 text-emerald-600" />
+                Add New Staff / Chemist Account
+              </div>
 
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                New Password (leave blank to keep current)
-              </label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Enter new password"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-              />
-            </div>
+              <form onSubmit={handleAddStaffUser} className="space-y-3 text-xs">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Staff Full Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={staffFullName}
+                    onChange={(e) => setStaffFullName(e.target.value)}
+                    placeholder="e.g. Ramesh Kumar (Counter Chemist)"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none focus:border-emerald-600"
+                  />
+                </div>
 
-            <button
-              type="submit"
-              className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold cursor-pointer"
-            >
-              Update Owner Security Credentials
-            </button>
-          </form>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Staff Username *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={staffUsername}
+                      onChange={(e) => setStaffUsername(e.target.value)}
+                      placeholder="e.g. ramesh"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Initial Password *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={staffPassword}
+                      onChange={(e) => setStaffPassword(e.target.value)}
+                      placeholder="e.g. ramesh123"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer transition shadow-xs"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  Create Staff Account
+                </button>
+              </form>
+            </div>
+          </div>
         </div>
       )}
 

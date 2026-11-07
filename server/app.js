@@ -40,6 +40,13 @@ function authenticateToken(req, res, next) {
   });
 }
 
+export function requireOwner(req, res, next) {
+  if (req.user?.role !== 'owner') {
+    return res.status(403).json({ error: 'Access denied: Proprietor / Owner authority required.' });
+  }
+  next();
+}
+
 // Health / Online Connectivity Ping
 app.get('/api/ping', (req, res) => {
   res.json({ online: true, timestamp: new Date().toISOString() });
@@ -69,7 +76,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Reset catalog to official Vestas Pharmaceuticals price list
-app.post('/api/catalog/reset-official', async (req, res) => {
+app.post('/api/catalog/reset-official', authenticateToken, requireOwner, async (req, res) => {
   try {
     const db = await getDb();
     await resetToOfficialVestasCatalog(db);
@@ -121,7 +128,7 @@ app.post('/api/inventory/inward-scanned-bill', authenticateToken, async (req, re
 });
 
 // ==========================================
-// 1. SINGLE OWNER AUTHENTICATION ROUTES
+// 1. AUTHENTICATION & MULTI-ROLE ACCESS ROUTES (OWNER & WORKER)
 // ==========================================
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -131,20 +138,21 @@ app.post('/api/auth/login', async (req, res) => {
     }
     const db = await getDb();
     const result = await db.query(
-      "SELECT * FROM users WHERE role = 'owner' AND LOWER(username) = LOWER($1)",
+      'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
       [username.trim()]
     );
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid owner username or password.' });
+      return res.status(401).json({ error: 'Invalid username or password.' });
     }
     const user = result.rows[0];
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
-      return res.status(401).json({ error: 'Invalid owner username or password.' });
+      return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
+    const userRole = user.role || 'worker';
     const token = jwt.sign(
-      { id: user.id, username: user.username, fullName: user.full_name, role: 'owner' },
+      { id: user.id, username: user.username, fullName: user.full_name, role: userRole },
       JWT_SECRET,
       { expiresIn: '30d' }
     );
@@ -155,7 +163,7 @@ app.post('/api/auth/login', async (req, res) => {
         id: user.id,
         username: user.username,
         fullName: user.full_name,
-        role: 'owner',
+        role: userRole,
       },
     });
   } catch (err) {
@@ -181,15 +189,128 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
       [req.user.id]
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Owner account not found.' });
+      return res.status(404).json({ error: 'User account not found.' });
     }
     const u = result.rows[0];
     res.json({
       id: u.id,
       username: u.username,
       fullName: u.full_name,
-      role: 'owner',
+      role: u.role || 'worker',
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Worker Management Routes (Owner Authority Only)
+app.get('/api/users/workers', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const db = await getDb();
+    const result = await db.query(
+      "SELECT id, username, full_name, role, created_at FROM users WHERE role = 'worker' ORDER BY id ASC"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/users/workers', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const { username, password, full_name } = req.body || {};
+    if (!username || !password || !full_name) {
+      return res.status(400).json({ error: 'Staff username, password, and name are required.' });
+    }
+    const db = await getDb();
+    const check = await db.query('SELECT id FROM users WHERE LOWER(username) = LOWER($1)', [username.trim()]);
+    if (check.rows.length > 0) {
+      return res.status(400).json({ error: 'A user with this username already exists.' });
+    }
+    const hash = await bcrypt.hash(password.trim(), 10);
+    const ins = await db.query(
+      `INSERT INTO users (username, password_hash, full_name, role)
+       VALUES ($1, $2, $3, 'worker') RETURNING id, username, full_name, role, created_at`,
+      [username.trim(), hash, full_name.trim()]
+    );
+    res.status(201).json(ins.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/users/workers/:id', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const { password, full_name } = req.body || {};
+    const db = await getDb();
+    const targetId = parseInt(req.params.id, 10);
+    if (password && password.trim()) {
+      const hash = await bcrypt.hash(password.trim(), 10);
+      await db.query("UPDATE users SET password_hash = $1 WHERE id = $2 AND role = 'worker'", [hash, targetId]);
+    }
+    if (full_name && full_name.trim()) {
+      await db.query("UPDATE users SET full_name = $1 WHERE id = $2 AND role = 'worker'", [full_name.trim(), targetId]);
+    }
+    const updated = await db.query('SELECT id, username, full_name, role, created_at FROM users WHERE id = $1', [targetId]);
+    res.json(updated.rows[0] || {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/workers/:id', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const db = await getDb();
+    const targetId = parseInt(req.params.id, 10);
+    await db.query("DELETE FROM users WHERE id = $1 AND role = 'worker'", [targetId]);
+    res.json({ success: true, message: 'Worker account deleted successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// User aliases for settings management
+app.get('/api/users', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const db = await getDb();
+    const result = await db.query(
+      "SELECT id, username, full_name, role, created_at FROM users WHERE role = 'worker' ORDER BY id ASC"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/users', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const { username, password, full_name } = req.body || {};
+    if (!username || !password || !full_name) {
+      return res.status(400).json({ error: 'Staff username, password, and name are required.' });
+    }
+    const db = await getDb();
+    const check = await db.query('SELECT id FROM users WHERE LOWER(username) = LOWER($1)', [username.trim()]);
+    if (check.rows.length > 0) {
+      return res.status(400).json({ error: 'A user with this username already exists.' });
+    }
+    const hash = await bcrypt.hash(password.trim(), 10);
+    const ins = await db.query(
+      `INSERT INTO users (username, password_hash, full_name, role)
+       VALUES ($1, $2, $3, 'worker') RETURNING id, username, full_name, role, created_at`,
+      [username.trim(), hash, full_name.trim()]
+    );
+    res.status(201).json(ins.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/:id', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const db = await getDb();
+    const targetId = parseInt(req.params.id, 10);
+    await db.query("DELETE FROM users WHERE id = $1 AND role = 'worker'", [targetId]);
+    res.json({ success: true, message: 'Staff worker account removed successfully.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -243,7 +364,7 @@ app.get('/api/settings', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/settings', authenticateToken, async (req, res) => {
+app.put('/api/settings', authenticateToken, requireOwner, async (req, res) => {
   try {
     const db = await getDb();
     const s = req.body;
@@ -2218,7 +2339,7 @@ app.get('/api/audit-logs', authenticateToken, async (req, res) => {
 // ==========================================
 // 9. REPORTS & ANALYTICS ROUTE
 // ==========================================
-app.get('/api/reports', authenticateToken, async (req, res) => {
+app.get('/api/reports', authenticateToken, requireOwner, async (req, res) => {
   try {
     const db = await getDb();
     const { from, to } = req.query;
@@ -2317,7 +2438,7 @@ app.get('/api/reports', authenticateToken, async (req, res) => {
 // ==========================================
 // 10. DATABASE BACKUP & RESTORE ROUTES
 // ==========================================
-app.get('/api/backup', authenticateToken, async (req, res) => {
+app.get('/api/backup', authenticateToken, requireOwner, async (req, res) => {
   try {
     const db = await getDb();
     const settings = (await db.query('SELECT * FROM settings')).rows;
@@ -2350,7 +2471,7 @@ app.get('/api/backup', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/restore', authenticateToken, async (req, res) => {
+app.post('/api/restore', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { data } = req.body;
     if (!data || !Array.isArray(data.products)) {

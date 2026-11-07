@@ -116,11 +116,9 @@ async function handleOfflineRequest(endpoint, method, body) {
   }
 
   if (endpoint === '/api/auth/login') {
-    if (
-      body &&
-      body.username?.trim().toLowerCase() === 'admin' &&
-      body.password === 'vestas123'
-    ) {
+    const u = body?.username?.trim().toLowerCase();
+    const p = body?.password;
+    if (u === 'admin' && p === 'vestas123') {
       const user = {
         id: 1,
         username: 'admin',
@@ -130,7 +128,17 @@ async function handleOfflineRequest(endpoint, method, body) {
       await idbSetKv('owner_profile', user);
       return { token: getAuthToken() || 'offline-owner-token', user };
     }
-    throw new Error('Invalid owner credentials.');
+    if (u === 'staff' && p === 'staff123') {
+      const user = {
+        id: 2,
+        username: 'staff',
+        fullName: 'Counter Sales Staff / Chemist',
+        role: 'worker',
+      };
+      await idbSetKv('owner_profile', user);
+      return { token: getAuthToken() || 'offline-staff-token', user };
+    }
+    throw new Error('Invalid username or password.');
   }
 
   // 2. Settings
@@ -184,7 +192,11 @@ async function handleOfflineRequest(endpoint, method, body) {
     const allProducts = await idbGetAll('products');
 
     if (method === 'GET') {
-      return allProducts.sort((a, b) => a.name.localeCompare(b.name));
+      const cachedProfile = await idbGetKv('owner_profile', {});
+      const list = cachedProfile?.role === 'worker'
+        ? allProducts.map((p) => ({ ...p, purchase_price: '0.00' }))
+        : allProducts;
+      return list.sort((a, b) => a.name.localeCompare(b.name));
     }
 
     // Add New Medicine / Batch while Offline
@@ -684,6 +696,42 @@ async function handleOfflineRequest(endpoint, method, body) {
       products,
       customers,
     };
+  }
+
+  // 9. Users / Workers management offline
+  if (endpoint === '/api/users' || endpoint === '/api/users/workers') {
+    const defaultWorkers = [
+      { id: 2, username: 'staff', full_name: 'Counter Sales Staff / Chemist', role: 'worker', created_at: new Date().toISOString() }
+    ];
+    const workers = await idbGetKv('worker_accounts', defaultWorkers);
+    if (method === 'GET') {
+      return workers;
+    }
+    if (method === 'POST') {
+      const newWorker = {
+        id: Date.now(),
+        username: (body.username || '').trim(),
+        full_name: (body.full_name || '').trim(),
+        role: 'worker',
+        created_at: new Date().toISOString(),
+      };
+      const updated = [...workers, newWorker];
+      await idbSetKv('worker_accounts', updated);
+      return newWorker;
+    }
+  }
+
+  if (endpoint.startsWith('/api/users/') || endpoint.startsWith('/api/users/workers/')) {
+    const id = parseInt(endpoint.split('/').pop(), 10);
+    const defaultWorkers = [
+      { id: 2, username: 'staff', full_name: 'Counter Sales Staff / Chemist', role: 'worker', created_at: new Date().toISOString() }
+    ];
+    const workers = await idbGetKv('worker_accounts', defaultWorkers);
+    if (method === 'DELETE') {
+      const updated = workers.filter((w) => w.id !== id);
+      await idbSetKv('worker_accounts', updated);
+      return { success: true };
+    }
   }
 
   return {};

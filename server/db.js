@@ -347,15 +347,24 @@ async function initializeSchema(db) {
     ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS client_operation_id VARCHAR(120);
   `);
 
-  // Ensure Single Owner Account only (remove any non-owner accounts)
-  await db.exec(`DELETE FROM users WHERE role != 'owner';`);
-  const userCheck = await db.query('SELECT COUNT(*) as count FROM users');
-  if (Number(userCheck.rows[0].count) === 0) {
+  // Ensure Default Owner and Worker accounts exist
+  const ownerCheck = await db.query("SELECT * FROM users WHERE role = 'owner' LIMIT 1");
+  if (ownerCheck.rows.length === 0) {
     const ownerHash = await bcrypt.hash('vestas123', 10);
     await db.query(
       `INSERT INTO users (username, password_hash, full_name, role)
        VALUES ($1, $2, $3, 'owner')`,
       ['admin', ownerHash, 'S. Satyendranath (Proprietor)']
+    );
+  }
+
+  const staffCheck = await db.query("SELECT * FROM users WHERE role = 'worker' LIMIT 1");
+  if (staffCheck.rows.length === 0) {
+    const staffHash = await bcrypt.hash('staff123', 10);
+    await db.query(
+      `INSERT INTO users (username, password_hash, full_name, role)
+       VALUES ($1, $2, $3, 'worker')`,
+      ['staff', staffHash, 'Counter Sales Staff / Chemist']
     );
   }
 

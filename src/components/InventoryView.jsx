@@ -15,7 +15,8 @@ import {
 import { apiRequest } from '../utils/api';
 import { formatCurrency, formatDateTime } from '../utils/exportAndPdf';
 
-export default function InventoryView({ products = [], settings = {}, onRefresh }) {
+export default function InventoryView({ products = [], settings = {}, onRefresh, user }) {
+  const isWorker = user?.role === 'worker';
   const symbol = settings?.currency_symbol || '₹';
   const [activeTab, setActiveTab] = useState('batch'); // 'batch' | 'alerts' | 'expiry' | 'history'
   const [search, setSearch] = useState('');
@@ -263,7 +264,7 @@ export default function InventoryView({ products = [], settings = {}, onRefresh 
                   <th className="py-3 px-4 font-semibold">Medicine Name</th>
                   <th className="py-3 px-3 font-semibold">Batch No</th>
                   <th className="py-3 px-3 font-semibold">Expiry Date</th>
-                  <th className="py-3 px-3 font-semibold text-right">Purchase Price</th>
+                  {!isWorker && <th className="py-3 px-3 font-semibold text-right">Purchase Price</th>}
                   <th className="py-3 px-3 font-semibold text-right">Selling Price</th>
                   <th className="py-3 px-3 font-semibold text-center">Current Stock</th>
                   <th className="py-3 px-3 font-semibold text-center">Min Level</th>
@@ -287,9 +288,11 @@ export default function InventoryView({ products = [], settings = {}, onRefresh 
                         {p.batch_number}
                       </td>
                       <td className="py-3 px-3 text-slate-700">{p.expiry_date}</td>
-                      <td className="py-3 px-3 text-right text-slate-600">
-                        {formatCurrency(p.purchase_price, symbol)}
-                      </td>
+                      {!isWorker && (
+                        <td className="py-3 px-3 text-right text-slate-600">
+                          {formatCurrency(p.purchase_price, symbol)}
+                        </td>
+                      )}
                       <td className="py-3 px-3 text-right font-semibold text-emerald-700">
                         {formatCurrency(p.selling_price, symbol)}
                       </td>
@@ -675,17 +678,19 @@ export default function InventoryView({ products = [], settings = {}, onRefresh 
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-slate-600 mb-1">Purchase ({symbol})</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={purchasePrice}
-                      onChange={(e) => setPurchasePrice(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
-                    />
-                  </div>
+                <div className={`grid ${isWorker ? 'grid-cols-2' : 'grid-cols-3'} gap-3`}>
+                  {!isWorker && (
+                    <div>
+                      <label className="block text-slate-600 mb-1">Purchase ({symbol})</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={purchasePrice}
+                        onChange={(e) => setPurchasePrice(e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                      />
+                    </div>
+                  )}
                   <div>
                     <label className="block text-emerald-700 font-semibold mb-1">
                       Selling ({symbol})

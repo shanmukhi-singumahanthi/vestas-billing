@@ -45,14 +45,14 @@ import InvoiceModal, { VestasLogo } from './components/InvoiceModal';
 import SyncCenterModal from './components/SyncCenterModal';
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Owner Dashboard', icon: LayoutDashboard },
+  { id: 'dashboard', label: 'Owner Dashboard', icon: LayoutDashboard, ownerOnly: true },
   { id: 'billing', label: 'New Bill (POS)', icon: ShoppingCart },
   { id: 'invoices', label: 'Invoices & Reprint', icon: FileText },
   { id: 'products', label: 'Medicines & Batches', icon: Pill },
   { id: 'inventory', label: 'Inventory & Stock', icon: Boxes },
   { id: 'customers', label: 'Customers & Dues', icon: Users },
-  { id: 'reports', label: 'Reports & Profit', icon: BarChart3 },
-  { id: 'settings', label: 'Settings & Backup', icon: Settings },
+  { id: 'reports', label: 'Reports & Profit', icon: BarChart3, ownerOnly: true },
+  { id: 'settings', label: 'Settings & Backup', icon: Settings, ownerOnly: true },
 ];
 
 export default function App() {
@@ -162,6 +162,9 @@ export default function App() {
     apiRequest('/api/auth/me')
       .then((u) => {
         setUser(u);
+        if (u && u.role === 'worker') {
+          setActiveTab('billing');
+        }
         return fetchAllCoreData();
       })
       .catch(() => {
@@ -175,7 +178,7 @@ export default function App() {
 
   const handleLoginSuccess = (loggedInUser) => {
     setUser(loggedInUser);
-    setActiveTab('dashboard');
+    setActiveTab(loggedInUser.role === 'worker' ? 'billing' : 'dashboard');
     fetchAllCoreData();
   };
 
@@ -205,6 +208,8 @@ export default function App() {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
 
+  const isWorker = user?.role === 'worker';
+  const visibleNavItems = NAV_ITEMS.filter((item) => !(isWorker && item.ownerOnly));
   const alertCount =
     Number(dashboard?.lowStockCount || 0) + Number(dashboard?.outOfStockCount || 0);
 
@@ -249,15 +254,22 @@ export default function App() {
           {/* Official Brand Header with Vestas Double-Triangle Logo */}
           <div className="px-5 py-4 border-b border-slate-100 flex flex-col items-center text-center bg-gradient-to-b from-white to-slate-50/60">
             <VestasLogo logoUrl={settings.logo_url} size="md" variant="full" />
-            <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-sky-50 text-sky-800 border-sky-200">
-              <Crown className="w-3 h-3 text-amber-600" />
-              Single Owner Edition
-            </div>
+            {isWorker ? (
+              <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-emerald-50 text-emerald-800 border-emerald-200">
+                <Users className="w-3 h-3 text-emerald-600" />
+                Counter Staff Edition
+              </div>
+            ) : (
+              <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-sky-50 text-sky-800 border-sky-200">
+                <Crown className="w-3 h-3 text-amber-600" />
+                Single Owner Edition
+              </div>
+            )}
           </div>
 
           {/* Navigation Links */}
           <nav className="p-3 space-y-1">
-            {NAV_ITEMS.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
               return (
@@ -328,7 +340,9 @@ export default function App() {
           <div className="flex items-center justify-between px-1">
             <div className="min-w-0">
               <div className="text-xs font-bold text-slate-800 truncate">{user.fullName}</div>
-              <div className="text-[11px] text-slate-500">Proprietor (@{user.username})</div>
+              <div className="text-[11px] text-slate-500">
+                {isWorker ? 'Counter Staff / Chemist' : `Proprietor (@${user.username})`}
+              </div>
             </div>
             <button
               type="button"
@@ -434,6 +448,7 @@ export default function App() {
               onNavigate={setActiveTab}
               onViewInvoice={setSelectedInvoice}
               onRefresh={fetchAllCoreData}
+              user={user}
             />
           )}
 
@@ -445,11 +460,12 @@ export default function App() {
               onBillCreated={handleBillCreated}
               onPreviewInvoice={setSelectedInvoice}
               onRefresh={fetchAllCoreData}
+              user={user}
             />
           )}
 
           {activeTab === 'invoices' && (
-            <InvoicesView settings={settings} onViewInvoice={setSelectedInvoice} />
+            <InvoicesView settings={settings} onViewInvoice={setSelectedInvoice} user={user} />
           )}
 
           {activeTab === 'products' && (
@@ -457,6 +473,7 @@ export default function App() {
               products={products}
               settings={settings}
               onRefresh={fetchAllCoreData}
+              user={user}
             />
           )}
 
@@ -465,6 +482,7 @@ export default function App() {
               products={products}
               settings={settings}
               onRefresh={fetchAllCoreData}
+              user={user}
             />
           )}
 
@@ -474,18 +492,19 @@ export default function App() {
               settings={settings}
               onRefresh={fetchAllCoreData}
               onViewInvoice={setSelectedInvoice}
+              user={user}
             />
           )}
 
-          {activeTab === 'reports' && <ReportsView settings={settings} />}
+          {activeTab === 'reports' && (!isWorker ? <ReportsView settings={settings} /> : null)}
 
-          {activeTab === 'settings' && (
+          {activeTab === 'settings' && (!isWorker ? (
             <SettingsView
               settings={settings}
               onSettingsSaved={(newSettings) => setSettings(newSettings)}
               onFullRefresh={fetchAllCoreData}
             />
-          )}
+          ) : null)}
         </main>
       </div>
 
