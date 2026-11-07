@@ -1,4 +1,3 @@
-import { createWorker } from 'tesseract.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -253,9 +252,10 @@ export async function scanBillImage(imageInput, apiKey = '') {
     }
   }
 
-  // 2. Perform OCR with Tesseract
+  // 2. Perform OCR with Tesseract (loaded lazily only when bill scanning is invoked)
   let rawText = '';
   try {
+    const { createWorker } = await import('tesseract.js');
     const worker = await createWorker('eng');
     const ret = await worker.recognize(imageBuffer);
     rawText = ret.data.text || '';

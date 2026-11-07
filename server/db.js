@@ -154,6 +154,37 @@ export async function getDb() {
 }
 
 async function initializeSchema(db) {
+  // Fast-path check for serverless cold starts:
+  // If tables, users, settings, and products are already initialized, skip 10+ DDL/DML round-trips!
+  try {
+    const fastCheck = await db.query(`
+      SELECT
+        (SELECT COUNT(*) FROM settings) AS settings_count,
+        (SELECT COUNT(*) FROM users) AS users_count,
+        (SELECT COUNT(*) FROM products) AS products_count
+    `);
+    const row = fastCheck.rows?.[0];
+    if (
+      row &&
+      Number(row.settings_count) >= 1 &&
+      Number(row.users_count) >= 2 &&
+      Number(row.products_count) >= 4
+    ) {
+      // Ensure performance indexes exist (idempotent & single round-trip)
+      await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_products_name_batch ON products (LOWER(name), LOWER(batch_number));
+        CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoices (created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices (customer_id);
+        CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_id ON invoice_items (invoice_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_movements_created_at ON stock_movements (created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_stock_movements_product_id ON stock_movements (product_id);
+      `);
+      return;
+    }
+  } catch {
+    // Tables do not exist yet; proceed with full schema initialization below
+  }
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -345,6 +376,13 @@ async function initializeSchema(db) {
     ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS sgst_percent NUMERIC(5,2) DEFAULT 0.00;
     ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS sgst_amount NUMERIC(12,2) DEFAULT 0.00;
     ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS client_operation_id VARCHAR(120);
+
+    CREATE INDEX IF NOT EXISTS idx_products_name_batch ON products (LOWER(name), LOWER(batch_number));
+    CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoices (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices (customer_id);
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_id ON invoice_items (invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_created_at ON stock_movements (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_product_id ON stock_movements (product_id);
   `);
 
   // Ensure Default Owner and Worker accounts exist

@@ -1,7 +1,3 @@
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import * as XLSX from 'xlsx';
-
 export function formatCurrency(amount, symbol = '₹') {
   const num = Number(amount || 0);
   return `${symbol}${num.toLocaleString('en-IN', {
@@ -70,7 +66,11 @@ export function numberToIndianWords(num) {
 /**
  * Generates and downloads a professional PDF invoice (supports both A4 and Thermal 80mm layouts)
  */
-export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
+export async function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
+  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ]);
   const bizName = settings.business_name || 'VESTAS PHARMACEUTICALS';
   const ownerName = settings.owner_name || 'S. SATYENDRANATH';
   const tagline = settings.tagline || 'Pharmaceutical Distributors & Wholesale Chemists';
@@ -508,7 +508,8 @@ export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
 /**
  * Exports any array of objects to an Excel (.xlsx) or CSV (.csv) file
  */
-export function exportToExcel(rows, sheetName = 'Sheet1', fileName = 'Vestas_Export.xlsx') {
+export async function exportToExcel(rows, sheetName = 'Sheet1', fileName = 'Vestas_Export.xlsx') {
+  const XLSX = await import('xlsx');
   const worksheet = XLSX.utils.json_to_sheet(rows);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
@@ -566,8 +567,9 @@ export function downloadProductImportTemplate() {
 export function parseSpreadsheetFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
+        const XLSX = await import('xlsx');
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
         const firstSheet = workbook.SheetNames[0];
@@ -585,7 +587,11 @@ export function parseSpreadsheetFile(file) {
 /**
  * Exports a formatted PDF report table (for Sales, Profit, Stock, Expiry, or Customer reports)
  */
-export function exportReportPDF({ title, subtitle, columns, rows, summaryItems = [], settings = {}, fileName = 'Vestas_Report.pdf' }) {
+export async function exportReportPDF({ title, subtitle, columns, rows, summaryItems = [], settings = {}, fileName = 'Vestas_Report.pdf' }) {
+  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ]);
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const bizName = settings.business_name || 'VESTAS PHARMACEUTICALS';
 

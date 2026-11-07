@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useDeferredValue, lazy, Suspense } from 'react';
 import {
   Search,
   Plus,
@@ -14,9 +14,10 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import BillScannerModal from './BillScannerModal';
 import { apiRequest } from '../utils/api';
 import { formatCurrency } from '../utils/exportAndPdf';
+
+const BillScannerModal = lazy(() => import('./BillScannerModal'));
 
 export default function BillingView({
   products = [],
@@ -93,6 +94,9 @@ export default function BillingView({
   useEffect(() => {
     setEnableGst(settings?.enable_gst !== false);
     setTaxInclusive(Boolean(settings?.tax_inclusive));
+    if (settings?.next_invoice_number) {
+      setNextInvoiceNo(`${settings.invoice_prefix || 'VP-'}${settings.next_invoice_number}`);
+    }
   }, [settings]);
 
   const fetchNextNumber = async () => {
@@ -105,8 +109,12 @@ export default function BillingView({
   };
 
   useEffect(() => {
-    fetchNextNumber();
-  }, [products]);
+    if (!settings?.next_invoice_number) {
+      fetchNextNumber();
+    }
+  }, [settings?.next_invoice_number]);
+
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const categories = useMemo(() => {
     const set = new Set(['All']);
@@ -117,10 +125,10 @@ export default function BillingView({
   }, [products]);
 
   const filteredProducts = useMemo(() => {
+    const q = deferredSearchQuery.trim().toLowerCase();
     return products.filter((p) => {
       if (selectedCategory !== 'All' && p.category !== selectedCategory) return false;
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.trim().toLowerCase();
+      if (!q) return true;
       return (
         p.name.toLowerCase().includes(q) ||
         p.sku.toLowerCase().includes(q) ||
@@ -129,7 +137,7 @@ export default function BillingView({
         (p.manufacturer && p.manufacturer.toLowerCase().includes(q))
       );
     });
-  }, [products, searchQuery, selectedCategory]);
+  }, [products, deferredSearchQuery, selectedCategory]);
 
   const handleSelectExistingCustomer = (custId) => {
     setSelectedCustomerId(custId);
@@ -1351,11 +1359,13 @@ export default function BillingView({
 
       {/* Bill Scanner & Batch Inward Modal */}
       {showBillScanner && (
-        <BillScannerModal
-          settings={settings}
-          onClose={() => setShowBillScanner(false)}
-          onStockUpdated={onRefresh}
-        />
+        <Suspense fallback={null}>
+          <BillScannerModal
+            settings={settings}
+            onClose={() => setShowBillScanner(false)}
+            onStockUpdated={onRefresh}
+          />
+        </Suspense>
       )}
     </div>
   );

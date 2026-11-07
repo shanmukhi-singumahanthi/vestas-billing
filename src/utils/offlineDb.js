@@ -141,29 +141,36 @@ export async function getSyncHistory() {
   return list.sort((a, b) => new Date(b.synced_at) - new Date(a.synced_at));
 }
 
+let autoBackupTimer = null;
+
 /**
- * Automatic Local Backup in IndexedDB after every change
+ * Automatic Local Backup in IndexedDB (debounced so it never blocks active UI operations)
  */
-export async function saveAutomaticLocalBackup() {
-  try {
-    const [settings, products, customers, invoices, stock_movements] = await Promise.all([
-      idbGetKv('settings', {}),
-      idbGetAll('products'),
-      idbGetAll('customers'),
-      idbGetAll('invoices'),
-      idbGetAll('stock_movements'),
-    ]);
-    await idbSetKv('auto_backup_snapshot', {
-      savedAt: new Date().toISOString(),
-      settings,
-      products,
-      customers,
-      invoices,
-      stock_movements,
-    });
-  } catch {
-    // ignore
+export function saveAutomaticLocalBackup() {
+  if (autoBackupTimer) {
+    clearTimeout(autoBackupTimer);
   }
+  autoBackupTimer = setTimeout(async () => {
+    try {
+      const [settings, products, customers, invoices, stock_movements] = await Promise.all([
+        idbGetKv('settings', {}),
+        idbGetAll('products'),
+        idbGetAll('customers'),
+        idbGetAll('invoices'),
+        idbGetAll('stock_movements'),
+      ]);
+      await idbSetKv('auto_backup_snapshot', {
+        savedAt: new Date().toISOString(),
+        settings,
+        products,
+        customers,
+        invoices,
+        stock_movements,
+      });
+    } catch {
+      // ignore
+    }
+  }, 4000);
 }
 
 /**

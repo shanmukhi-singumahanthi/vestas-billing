@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useDeferredValue } from 'react';
 import {
   PackagePlus,
   AlertTriangle,
@@ -50,8 +50,12 @@ export default function InventoryView({ products = [], settings = {}, onRefresh,
   };
 
   useEffect(() => {
-    loadMovements();
-  }, [products]);
+    if (activeTab === 'history') {
+      loadMovements();
+    }
+  }, [activeTab, products]);
+
+  const deferredSearch = useDeferredValue(search);
 
   const now = new Date();
   const ninetyDays = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
@@ -77,8 +81,8 @@ export default function InventoryView({ products = [], settings = {}, onRefresh,
   }, [products]);
 
   const filteredBatchProducts = useMemo(() => {
-    if (!search.trim()) return products;
-    const q = search.trim().toLowerCase();
+    const q = deferredSearch.trim().toLowerCase();
+    if (!q) return products;
     return products.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
@@ -86,7 +90,7 @@ export default function InventoryView({ products = [], settings = {}, onRefresh,
         p.batch_number.toLowerCase().includes(q) ||
         (p.manufacturer && p.manufacturer.toLowerCase().includes(q))
     );
-  }, [products, search]);
+  }, [products, deferredSearch]);
 
   const openAdjustModal = (product, defaultType = 'PURCHASE_RESTOCK') => {
     setAdjustModalProduct(product);

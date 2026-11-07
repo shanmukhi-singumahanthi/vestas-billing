@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useDeferredValue, lazy, Suspense } from 'react';
 import {
   Plus,
   Search,
@@ -15,7 +15,6 @@ import {
   RotateCcw,
   Sparkles,
 } from 'lucide-react';
-import BillScannerModal from './BillScannerModal';
 import { apiRequest } from '../utils/api';
 import { idbReplaceAll } from '../utils/offlineDb';
 import {
@@ -25,6 +24,8 @@ import {
   parseSpreadsheetFile,
   exportReportPDF,
 } from '../utils/exportAndPdf';
+
+const BillScannerModal = lazy(() => import('./BillScannerModal'));
 
 const EMPTY_PRODUCT = {
   name: '',
@@ -77,10 +78,12 @@ export default function ProductsView({ products = [], settings = {}, onRefresh, 
   const [showBillScanner, setShowBillScanner] = useState(false);
 
   const fileInputRef = useRef(null);
+  const deferredSearch = useDeferredValue(search);
 
   const filteredProducts = useMemo(() => {
     const now = new Date();
     const ninetyDays = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+    const q = deferredSearch.trim().toLowerCase();
 
     return products.filter((p) => {
       if (categoryFilter !== 'All' && p.category !== categoryFilter) return false;
@@ -95,8 +98,7 @@ export default function ProductsView({ products = [], settings = {}, onRefresh, 
         if (d > ninetyDays) return false;
       }
 
-      if (!search.trim()) return true;
-      const q = search.trim().toLowerCase();
+      if (!q) return true;
       return (
         p.name.toLowerCase().includes(q) ||
         p.sku.toLowerCase().includes(q) ||
@@ -105,7 +107,7 @@ export default function ProductsView({ products = [], settings = {}, onRefresh, 
         (p.manufacturer && p.manufacturer.toLowerCase().includes(q))
       );
     });
-  }, [products, search, categoryFilter, statusFilter]);
+  }, [products, deferredSearch, categoryFilter, statusFilter]);
 
   const openAddModal = () => {
     const nextCode = `MED-${1001 + products.length}`;
@@ -870,11 +872,13 @@ export default function ProductsView({ products = [], settings = {}, onRefresh, 
       )}
       {/* Bill Scanner & Batch Inward Modal */}
       {showBillScanner && (
-        <BillScannerModal
-          settings={settings}
-          onClose={() => setShowBillScanner(false)}
-          onStockUpdated={onRefresh}
-        />
+        <Suspense fallback={null}>
+          <BillScannerModal
+            settings={settings}
+            onClose={() => setShowBillScanner(false)}
+            onStockUpdated={onRefresh}
+          />
+        </Suspense>
       )}
     </div>
   );

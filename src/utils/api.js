@@ -56,8 +56,8 @@ export async function apiRequest(endpoint, options = {}) {
       throw new Error(data.error || `Request failed with status ${res.status}`);
     }
 
-    // Mirror fresh server responses into IndexedDB for seamless offline readiness
-    await mirrorServerResponseToIndexedDb(endpoint, method, data);
+    // Mirror fresh server responses into IndexedDB asynchronously in the background (non-blocking)
+    mirrorServerResponseToIndexedDb(endpoint, method, data);
 
     return data;
   } catch (err) {
@@ -80,20 +80,18 @@ async function mirrorServerResponseToIndexedDb(endpoint, method, data) {
       await idbSetKv('settings', data);
     } else if (method === 'GET' && endpoint === '/api/products' && Array.isArray(data)) {
       await idbReplaceAll('products', data);
-      await saveAutomaticLocalBackup();
     } else if (method === 'GET' && endpoint === '/api/customers' && Array.isArray(data)) {
       await idbReplaceAll('customers', data);
     } else if (method === 'GET' && endpoint === '/api/invoices' && Array.isArray(data)) {
       await idbReplaceAll('invoices', data);
-      await saveAutomaticLocalBackup();
     } else if (method === 'GET' && endpoint.startsWith('/api/inventory/movements') && Array.isArray(data)) {
       await idbReplaceAll('stock_movements', data);
     } else if (method === 'POST' && endpoint === '/api/invoices' && data.id) {
       await idbPut('invoices', data);
-      await saveAutomaticLocalBackup();
+      saveAutomaticLocalBackup();
     } else if ((method === 'POST' || method === 'PUT') && endpoint.startsWith('/api/products') && data.id) {
       await idbPut('products', data);
-      await saveAutomaticLocalBackup();
+      saveAutomaticLocalBackup();
     }
   } catch {
     // non-blocking mirror

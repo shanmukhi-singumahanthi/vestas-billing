@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -28,6 +28,9 @@ import {
   synchronizeOfflineQueue,
 } from './utils/api';
 import {
+  idbGetAll,
+  idbGetKv,
+  computeLocalDashboard,
   isBrowserOffline,
   isSimulatedOffline,
   setSimulatedOffline,
@@ -37,15 +40,16 @@ import {
 import LoginView from './components/LoginView';
 import DashboardView from './components/DashboardView';
 import BillingView from './components/BillingView';
-import InvoicesView from './components/InvoicesView';
-import ProductsView from './components/ProductsView';
-import InventoryView from './components/InventoryView';
-import CustomersView from './components/CustomersView';
-import ReportsView from './components/ReportsView';
-import SettingsView from './components/SettingsView';
 import InvoiceModal, { VestasLogo } from './components/InvoiceModal';
-import SyncCenterModal from './components/SyncCenterModal';
-import InstallAppModal from './components/InstallAppModal';
+
+const InvoicesView = lazy(() => import('./components/InvoicesView'));
+const ProductsView = lazy(() => import('./components/ProductsView'));
+const InventoryView = lazy(() => import('./components/InventoryView'));
+const CustomersView = lazy(() => import('./components/CustomersView'));
+const ReportsView = lazy(() => import('./components/ReportsView'));
+const SettingsView = lazy(() => import('./components/SettingsView'));
+const SyncCenterModal = lazy(() => import('./components/SyncCenterModal'));
+const InstallAppModal = lazy(() => import('./components/InstallAppModal'));
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Owner Dashboard', shortLabel: 'Home', icon: LayoutDashboard, ownerOnly: true },
@@ -213,21 +217,60 @@ export default function App() {
       setAuthChecking(false);
       return;
     }
-    apiRequest('/api/auth/me')
-      .then((u) => {
+
+    let cancelled = false;
+
+    // 1. Instant Stale-While-Revalidate Hydration from IndexedDB (<50ms boot)
+    (async () => {
+      try {
+        const [cachedUser, cachedSettings, cachedProducts, cachedCustomers, cachedDash] =
+          await Promise.all([
+            idbGetKv('owner_profile', null),
+            idbGetKv('settings', null),
+            idbGetAll('products'),
+            idbGetAll('customers'),
+            computeLocalDashboard().catch(() => null),
+          ]);
+        if (cancelled) return;
+        if (cachedUser && cachedUser.id) {
+          setUser((prev) => prev || cachedUser);
+          if (cachedUser.role === 'worker') {
+            setActiveTab('billing');
+          }
+          setAuthChecking(false);
+        }
+        if (cachedSettings) setSettings((prev) => (prev?.id ? prev : cachedSettings));
+        if (cachedProducts?.length) setProducts((prev) => (prev.length ? prev : cachedProducts));
+        if (cachedCustomers?.length) setCustomers((prev) => (prev.length ? prev : cachedCustomers));
+        if (cachedDash && cachedDash.totalProducts > 0) {
+          setDashboard((prev) => prev || cachedDash);
+        }
+      } catch {
+        // ignore local cache hydration errors
+      }
+    })();
+
+    // 2. Concurrent Network Verification & Fresh Data Sync
+    Promise.all([apiRequest('/api/auth/me'), fetchAllCoreData()])
+      .then(([u]) => {
+        if (cancelled) return;
         setUser(u);
         if (u && u.role === 'worker') {
-          setActiveTab('billing');
+          setActiveTab((prev) => (prev === 'dashboard' ? 'billing' : prev));
         }
-        return fetchAllCoreData();
       })
       .catch(() => {
+        if (cancelled) return;
         setAuthToken(null);
         setUser(null);
       })
       .finally(() => {
-        setAuthChecking(false);
+        if (!cancelled) setAuthChecking(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [fetchAllCoreData]);
 
   const handleLoginSuccess = (loggedInUser) => {
@@ -241,9 +284,10 @@ export default function App() {
     setUser(null);
   };
 
-  const handleBillCreated = async (savedInvoice) => {
-    await fetchAllCoreData();
+  const handleBillCreated = (savedInvoice) => {
+    // Open the Invoice Print/PDF Modal immediately (0ms wait) and refresh data in the background
     setSelectedInvoice(savedInvoice);
+    fetchAllCoreData();
   };
 
   const handleToggleSimulatedOffline = (val) => {
@@ -268,13 +312,17 @@ export default function App() {
           isAppInstalled={isAppInstalled}
           onTriggerNativeInstall={handleTriggerNativeInstall}
         />
-        <InstallAppModal
-          isOpen={installModalOpen}
-          onClose={() => setInstallModalOpen(false)}
-          canNativeInstall={!!deferredInstallPrompt}
-          isInstalled={isAppInstalled}
-          onTriggerNativeInstall={handleTriggerNativeInstall}
-        />
+        {installModalOpen && (
+          <Suspense fallback={null}>
+            <InstallAppModal
+              isOpen={installModalOpen}
+              onClose={() => setInstallModalOpen(false)}
+              canNativeInstall={!!deferredInstallPrompt}
+              isInstalled={isAppInstalled}
+              onTriggerNativeInstall={handleTriggerNativeInstall}
+            />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -578,70 +626,79 @@ export default function App() {
         )}
 
         <main className="p-2.5 sm:p-6 max-w-[1600px] w-full mx-auto flex-1">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              dashboard={dashboard}
-              settings={settings}
-              onNavigate={setActiveTab}
-              onViewInvoice={setSelectedInvoice}
-              onRefresh={fetchAllCoreData}
-              user={user}
-            />
-          )}
+          <Suspense
+            fallback={
+              <div className="py-16 text-center text-xs font-semibold text-slate-500">
+                Loading module...
+              </div>
+            }
+          >
+            {activeTab === 'dashboard' && (
+              <DashboardView
+                dashboard={dashboard}
+                settings={settings}
+                onNavigate={setActiveTab}
+                onViewInvoice={setSelectedInvoice}
+                onRefresh={fetchAllCoreData}
+                user={user}
+              />
+            )}
 
-          {activeTab === 'billing' && (
-            <BillingView
-              products={products}
-              customers={customers}
-              settings={settings}
-              onBillCreated={handleBillCreated}
-              onPreviewInvoice={setSelectedInvoice}
-              onRefresh={fetchAllCoreData}
-              user={user}
-            />
-          )}
+            {activeTab === 'billing' && (
+              <BillingView
+                products={products}
+                customers={customers}
+                settings={settings}
+                onBillCreated={handleBillCreated}
+                onPreviewInvoice={setSelectedInvoice}
+                onRefresh={fetchAllCoreData}
+                user={user}
+              />
+            )}
 
-          {activeTab === 'invoices' && (
-            <InvoicesView settings={settings} onViewInvoice={setSelectedInvoice} user={user} />
-          )}
+            {activeTab === 'invoices' && (
+              <InvoicesView settings={settings} onViewInvoice={setSelectedInvoice} user={user} />
+            )}
 
-          {activeTab === 'products' && (
-            <ProductsView
-              products={products}
-              settings={settings}
-              onRefresh={fetchAllCoreData}
-              user={user}
-            />
-          )}
+            {activeTab === 'products' && (
+              <ProductsView
+                products={products}
+                settings={settings}
+                onRefresh={fetchAllCoreData}
+                user={user}
+              />
+            )}
 
-          {activeTab === 'inventory' && (
-            <InventoryView
-              products={products}
-              settings={settings}
-              onRefresh={fetchAllCoreData}
-              user={user}
-            />
-          )}
+            {activeTab === 'inventory' && (
+              <InventoryView
+                products={products}
+                settings={settings}
+                onRefresh={fetchAllCoreData}
+                user={user}
+              />
+            )}
 
-          {activeTab === 'customers' && (
-            <CustomersView
-              customers={customers}
-              settings={settings}
-              onRefresh={fetchAllCoreData}
-              onViewInvoice={setSelectedInvoice}
-              user={user}
-            />
-          )}
+            {activeTab === 'customers' && (
+              <CustomersView
+                customers={customers}
+                settings={settings}
+                onRefresh={fetchAllCoreData}
+                onViewInvoice={setSelectedInvoice}
+                user={user}
+              />
+            )}
 
-          {activeTab === 'reports' && (!isWorker ? <ReportsView settings={settings} /> : null)}
+            {activeTab === 'reports' && (!isWorker ? <ReportsView settings={settings} /> : null)}
 
-          {activeTab === 'settings' && (!isWorker ? (
-            <SettingsView
-              settings={settings}
-              onSettingsSaved={(newSettings) => setSettings(newSettings)}
-              onFullRefresh={fetchAllCoreData}
-            />
-          ) : null)}
+            {activeTab === 'settings' &&
+              (!isWorker ? (
+                <SettingsView
+                  settings={settings}
+                  onSettingsSaved={(newSettings) => setSettings(newSettings)}
+                  onFullRefresh={fetchAllCoreData}
+                />
+              ) : null)}
+          </Suspense>
         </main>
       </div>
 
@@ -692,26 +749,34 @@ export default function App() {
       )}
 
       {/* Offline Storage & Sync Queue Modal */}
-      <SyncCenterModal
-        isOpen={syncModalOpen}
-        onClose={() => setSyncModalOpen(false)}
-        isOffline={isOffline}
-        simulatedOffline={simOffline}
-        onToggleSimulatedOffline={handleToggleSimulatedOffline}
-        pendingQueue={pendingQueue}
-        syncHistory={syncHistory}
-        syncing={syncing}
-        onSyncNow={handleRunSync}
-      />
+      {syncModalOpen && (
+        <Suspense fallback={null}>
+          <SyncCenterModal
+            isOpen={syncModalOpen}
+            onClose={() => setSyncModalOpen(false)}
+            isOffline={isOffline}
+            simulatedOffline={simOffline}
+            onToggleSimulatedOffline={handleToggleSimulatedOffline}
+            pendingQueue={pendingQueue}
+            syncHistory={syncHistory}
+            syncing={syncing}
+            onSyncNow={handleRunSync}
+          />
+        </Suspense>
+      )}
 
       {/* Download / Install Mobile & Desktop App Modal */}
-      <InstallAppModal
-        isOpen={installModalOpen}
-        onClose={() => setInstallModalOpen(false)}
-        canNativeInstall={!!deferredInstallPrompt}
-        isInstalled={isAppInstalled}
-        onTriggerNativeInstall={handleTriggerNativeInstall}
-      />
+      {installModalOpen && (
+        <Suspense fallback={null}>
+          <InstallAppModal
+            isOpen={installModalOpen}
+            onClose={() => setInstallModalOpen(false)}
+            canNativeInstall={!!deferredInstallPrompt}
+            isInstalled={isAppInstalled}
+            onTriggerNativeInstall={handleTriggerNativeInstall}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

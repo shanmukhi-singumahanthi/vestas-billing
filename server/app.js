@@ -452,13 +452,13 @@ app.get('/api/dashboard', authenticateToken, async (req, res) => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
-    const productsRes = await db.query('SELECT * FROM products ORDER BY name ASC, expiry_date ASC');
+    const [productsRes, invoicesRes, customersRes] = await Promise.all([
+      db.query('SELECT * FROM products ORDER BY name ASC, expiry_date ASC'),
+      db.query('SELECT * FROM invoices ORDER BY created_at DESC'),
+      db.query('SELECT * FROM customers'),
+    ]);
     const products = productsRes.rows;
-
-    const invoicesRes = await db.query('SELECT * FROM invoices ORDER BY created_at DESC');
     const invoices = invoicesRes.rows;
-
-    const customersRes = await db.query('SELECT * FROM customers');
     const customers = customersRes.rows;
 
     const todayInvoices = invoices.filter((inv) => new Date(inv.created_at) >= new Date(todayStart));
@@ -555,9 +555,20 @@ app.get('/api/dashboard', authenticateToken, async (req, res) => {
     }
 
     const recentInvoices = invoices.slice(0, 8);
-    for (const inv of recentInvoices) {
-      const itemsRes = await db.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [inv.id]);
-      inv.items = itemsRes.rows;
+    if (recentInvoices.length > 0) {
+      const recentIds = recentInvoices.map((inv) => Number(inv.id));
+      const itemsRes = await db.query(
+        'SELECT * FROM invoice_items WHERE invoice_id = ANY($1::int[]) ORDER BY id ASC',
+        [recentIds]
+      );
+      const itemsByInvoice = {};
+      for (const item of itemsRes.rows) {
+        if (!itemsByInvoice[item.invoice_id]) itemsByInvoice[item.invoice_id] = [];
+        itemsByInvoice[item.invoice_id].push(item);
+      }
+      for (const inv of recentInvoices) {
+        inv.items = itemsByInvoice[inv.id] || [];
+      }
     }
 
     res.json({
@@ -1273,15 +1284,20 @@ app.get('/api/invoices', authenticateToken, async (req, res) => {
       invoices = invoices.filter((inv) => new Date(inv.created_at) <= toDate);
     }
 
-    const allItemsRes = await db.query('SELECT * FROM invoice_items ORDER BY id ASC');
-    const itemsByInvoice = {};
-    for (const item of allItemsRes.rows) {
-      if (!itemsByInvoice[item.invoice_id]) itemsByInvoice[item.invoice_id] = [];
-      itemsByInvoice[item.invoice_id].push(item);
-    }
-
-    for (const inv of invoices) {
-      inv.items = itemsByInvoice[inv.id] || [];
+    if (invoices.length > 0) {
+      const matchedIds = invoices.map((inv) => Number(inv.id));
+      const allItemsRes = await db.query(
+        'SELECT * FROM invoice_items WHERE invoice_id = ANY($1::int[]) ORDER BY id ASC',
+        [matchedIds]
+      );
+      const itemsByInvoice = {};
+      for (const item of allItemsRes.rows) {
+        if (!itemsByInvoice[item.invoice_id]) itemsByInvoice[item.invoice_id] = [];
+        itemsByInvoice[item.invoice_id].push(item);
+      }
+      for (const inv of invoices) {
+        inv.items = itemsByInvoice[inv.id] || [];
+      }
     }
 
     res.json(invoices);
@@ -1374,19 +1390,45 @@ async function processInvoiceCreation(tx, payload, performer, isOfflineSync = fa
   const isTaxInclusive =
     tax_inclusive !== undefined ? Boolean(tax_inclusive) : Boolean(settings.tax_inclusive);
 
+  // Pre-fetch all numeric product IDs in a single batch query to avoid N+1 lookups
+  const numericProductIds = [
+    ...new Set(
+      items
+        .map((it) => it.product_id)
+        .filter(
+          (pid) =>
+            pid &&
+            !String(pid).startsWith('manual-') &&
+            !String(pid).startsWith('offline-')
+        )
+        .map((pid) => parseInt(pid, 10))
+        .filter((pid) => !isNaN(pid))
+    ),
+  ];
+  const productByIdMap = new Map();
+  if (numericProductIds.length > 0) {
+    const batchProdRes = await tx.query('SELECT * FROM products WHERE id = ANY($1::int[])', [
+      numericProductIds,
+    ]);
+    for (const row of batchProdRes.rows) {
+      productByIdMap.set(Number(row.id), row);
+    }
+  }
+
   for (const item of items) {
     const qty = parseInt(item.quantity, 10);
     if (!qty || qty <= 0) {
       throw new Error(`Invalid quantity for "${item.product_name || 'item'}".`);
     }
 
-    // Try resolving product batch by id, client_uid, or (name + batch_number)
+    // Try resolving product batch from pre-fetched map, client_uid, or (name + batch_number)
     let product = null;
-    if (item.product_id && !String(item.product_id).startsWith('manual-') && !String(item.product_id).startsWith('offline-')) {
-      const prodRes = await tx.query('SELECT * FROM products WHERE id = $1', [
-        parseInt(item.product_id, 10),
-      ]);
-      if (prodRes.rows.length > 0) product = prodRes.rows[0];
+    if (
+      item.product_id &&
+      !String(item.product_id).startsWith('manual-') &&
+      !String(item.product_id).startsWith('offline-')
+    ) {
+      product = productByIdMap.get(parseInt(item.product_id, 10)) || null;
     }
     if (!product && item.client_uid) {
       const prodRes = await tx.query('SELECT * FROM products WHERE client_uid = $1', [
@@ -1599,11 +1641,9 @@ async function processInvoiceCreation(tx, payload, performer, isOfflineSync = fa
     savedInvoice.items.push(itemIns.rows[0]);
 
     if (pi.product) {
-      const freshProdRes = await tx.query('SELECT stock FROM products WHERE id = $1', [
-        pi.product.id,
-      ]);
-      const prevStock = Number(freshProdRes.rows[0]?.stock ?? pi.product.stock);
+      const prevStock = Number(pi.product.stock);
       const newStock = Math.max(0, prevStock - pi.quantity);
+      pi.product.stock = newStock;
 
       await tx.query(
         'UPDATE products SET stock = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
@@ -2128,22 +2168,28 @@ app.get('/api/customers/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Customer not found.' });
     }
     const customer = custRes.rows[0];
-    const invRes = await db.query(
-      'SELECT * FROM invoices WHERE customer_id = $1 ORDER BY created_at DESC',
-      [custId]
-    );
+    const [invRes, payRes] = await Promise.all([
+      db.query('SELECT * FROM invoices WHERE customer_id = $1 ORDER BY created_at DESC', [custId]),
+      db.query('SELECT * FROM customer_payments WHERE customer_id = $1 ORDER BY created_at DESC', [
+        custId,
+      ]),
+    ]);
     const invoices = invRes.rows;
-    for (const inv of invoices) {
-      const itemsRes = await db.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [
-        inv.id,
-      ]);
-      inv.items = itemsRes.rows;
+    if (invoices.length > 0) {
+      const invIds = invoices.map((inv) => Number(inv.id));
+      const itemsRes = await db.query(
+        'SELECT * FROM invoice_items WHERE invoice_id = ANY($1::int[]) ORDER BY id ASC',
+        [invIds]
+      );
+      const itemsByInvoice = {};
+      for (const item of itemsRes.rows) {
+        if (!itemsByInvoice[item.invoice_id]) itemsByInvoice[item.invoice_id] = [];
+        itemsByInvoice[item.invoice_id].push(item);
+      }
+      for (const inv of invoices) {
+        inv.items = itemsByInvoice[inv.id] || [];
+      }
     }
-
-    const payRes = await db.query(
-      'SELECT * FROM customer_payments WHERE customer_id = $1 ORDER BY created_at DESC',
-      [custId]
-    );
 
     res.json({
       ...customer,
@@ -2344,8 +2390,14 @@ app.get('/api/reports', authenticateToken, requireOwner, async (req, res) => {
     const db = await getDb();
     const { from, to } = req.query;
 
-    const invRes = await db.query('SELECT * FROM invoices ORDER BY created_at DESC');
+    const [invRes, productsRes, customersRes] = await Promise.all([
+      db.query('SELECT * FROM invoices ORDER BY created_at DESC'),
+      db.query('SELECT * FROM products ORDER BY name ASC, expiry_date ASC'),
+      db.query('SELECT * FROM customers ORDER BY total_purchases DESC'),
+    ]);
     let invoices = invRes.rows;
+    const products = productsRes.rows;
+    const customers = customersRes.rows;
 
     if (from) {
       const fromD = new Date(`${from}T00:00:00`);
@@ -2356,9 +2408,15 @@ app.get('/api/reports', authenticateToken, requireOwner, async (req, res) => {
       invoices = invoices.filter((i) => new Date(i.created_at) <= toD);
     }
 
-    const invoiceIds = new Set(invoices.map((i) => i.id));
-    const allItemsRes = await db.query('SELECT * FROM invoice_items');
-    const filteredItems = allItemsRes.rows.filter((item) => invoiceIds.has(item.invoice_id));
+    let filteredItems = [];
+    if (invoices.length > 0) {
+      const matchedIds = invoices.map((i) => Number(i.id));
+      const allItemsRes = await db.query(
+        'SELECT * FROM invoice_items WHERE invoice_id = ANY($1::int[])',
+        [matchedIds]
+      );
+      filteredItems = allItemsRes.rows;
+    }
 
     const totalSales = invoices.reduce((s, i) => s + Number(i.grand_total), 0);
     const totalTax = invoices.reduce((s, i) => s + Number(i.tax_amount), 0);
@@ -2407,12 +2465,6 @@ app.get('/api/reports', authenticateToken, requireOwner, async (req, res) => {
       paymentBreakdown[m].total = +(paymentBreakdown[m].total + Number(inv.grand_total)).toFixed(2);
     }
 
-    const productsRes = await db.query('SELECT * FROM products ORDER BY name ASC, expiry_date ASC');
-    const products = productsRes.rows;
-
-    const customersRes = await db.query('SELECT * FROM customers ORDER BY total_purchases DESC');
-    const customers = customersRes.rows;
-
     res.json({
       summary: {
         invoiceCount: invoices.length,
@@ -2441,15 +2493,33 @@ app.get('/api/reports', authenticateToken, requireOwner, async (req, res) => {
 app.get('/api/backup', authenticateToken, requireOwner, async (req, res) => {
   try {
     const db = await getDb();
-    const settings = (await db.query('SELECT * FROM settings')).rows;
-    const products = (await db.query('SELECT * FROM products ORDER BY id ASC')).rows;
-    const customers = (await db.query('SELECT * FROM customers ORDER BY id ASC')).rows;
-    const invoices = (await db.query('SELECT * FROM invoices ORDER BY id ASC')).rows;
-    const invoice_items = (await db.query('SELECT * FROM invoice_items ORDER BY id ASC')).rows;
-    const stock_movements = (await db.query('SELECT * FROM stock_movements ORDER BY id ASC')).rows;
-    const customer_payments = (await db.query('SELECT * FROM customer_payments ORDER BY id ASC'))
-      .rows;
-    const audit_logs = (await db.query('SELECT * FROM audit_logs ORDER BY id ASC')).rows;
+    const [
+      settingsRes,
+      productsRes,
+      customersRes,
+      invoicesRes,
+      invoiceItemsRes,
+      stockMovementsRes,
+      customerPaymentsRes,
+      auditLogsRes,
+    ] = await Promise.all([
+      db.query('SELECT * FROM settings'),
+      db.query('SELECT * FROM products ORDER BY id ASC'),
+      db.query('SELECT * FROM customers ORDER BY id ASC'),
+      db.query('SELECT * FROM invoices ORDER BY id ASC'),
+      db.query('SELECT * FROM invoice_items ORDER BY id ASC'),
+      db.query('SELECT * FROM stock_movements ORDER BY id ASC'),
+      db.query('SELECT * FROM customer_payments ORDER BY id ASC'),
+      db.query('SELECT * FROM audit_logs ORDER BY id ASC'),
+    ]);
+    const settings = settingsRes.rows;
+    const products = productsRes.rows;
+    const customers = customersRes.rows;
+    const invoices = invoicesRes.rows;
+    const invoice_items = invoiceItemsRes.rows;
+    const stock_movements = stockMovementsRes.rows;
+    const customer_payments = customerPaymentsRes.rows;
+    const audit_logs = auditLogsRes.rows;
 
     res.json({
       backupVersion: '2.0',
