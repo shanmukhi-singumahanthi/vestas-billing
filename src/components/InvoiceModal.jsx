@@ -9,37 +9,128 @@ import {
 } from '../utils/exportAndPdf';
 
 export function VestasLogo({ logoUrl, size = 'md', variant = 'mark' }) {
-  const effectiveUrl = logoUrl || '/logo.png';
+  // Custom uploaded logo override (if set in Settings)
+  if (logoUrl) {
+    if (variant === 'full') {
+      const scaleClass =
+        size === 'lg'
+          ? 'h-16 w-auto max-w-[230px]'
+          : size === 'sm'
+          ? 'h-9 w-auto max-w-[145px]'
+          : 'h-13 w-auto max-w-[195px]';
+      return (
+        <div className="inline-flex items-center select-none">
+          <img
+            src={logoUrl}
+            alt="Vestas Pharmaceuticals Logo"
+            className={`${scaleClass} object-contain rounded-md`}
+          />
+        </div>
+      );
+    }
 
-  if (variant === 'full') {
-    const scaleClass =
-      size === 'lg'
-        ? 'h-16 w-auto max-w-[220px]'
-        : size === 'sm'
-        ? 'h-9 w-auto max-w-[140px]'
-        : 'h-12 w-auto max-w-[180px]';
-
+    const dims = size === 'lg' ? 'w-14 h-14' : size === 'sm' ? 'w-8 h-8' : 'w-10 h-10';
     return (
-      <div className="inline-flex items-center select-none">
+      <div
+        className={`${dims} rounded-xl bg-white border border-slate-200/90 p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden`}
+      >
         <img
-          src={effectiveUrl}
-          alt="Vestas Pharmaceuticals Logo"
-          className={`${scaleClass} object-contain rounded-md`}
+          src={logoUrl}
+          alt="Vestas Logo"
+          className="w-full h-full object-contain select-none"
         />
       </div>
     );
   }
 
-  const dims = size === 'lg' ? 'w-14 h-14' : size === 'sm' ? 'w-8 h-8' : 'w-10 h-10';
+  // Official Vestas Pharmaceuticals Full Lockup (Red & Grey Double Inverted Triangles over "vestas PHARMACEUTICALS")
+  if (variant === 'full') {
+    const sizeClass =
+      size === 'lg'
+        ? 'h-16 sm:h-18 w-auto'
+        : size === 'sm'
+        ? 'h-9 sm:h-10 w-auto'
+        : 'h-13 sm:h-14 w-auto';
+
+    return (
+      <div className="inline-flex items-center justify-center select-none">
+        <svg
+          viewBox="0 0 600 280"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          className={sizeClass}
+          role="img"
+          aria-label="Vestas Pharmaceuticals Logo"
+        >
+          {/* Lower Slate-Grey Inverted Triangle / Chevron above "tas" */}
+          <polygon points="352,48 552,48 452,122" fill="#7a7d80" />
+          {/* Crisp White Separation Gap */}
+          <polygon points="347,19 557,19 452,96.5" fill="#ffffff" />
+          {/* Upper Vermilion-Red Inverted Triangle */}
+          <polygon points="352,21 552,21 452,93" fill="#d63e2a" />
+
+          {/* Lowercase "vestas" Wordmark */}
+          <text
+            x="292"
+            y="194"
+            textAnchor="middle"
+            fill="#1e2220"
+            fontFamily="'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif"
+            fontSize="118"
+            fontWeight="400"
+            letterSpacing="18"
+          >
+            vestas
+          </text>
+
+          {/* Uppercase "PHARMACEUTICALS" Subtitle */}
+          <text
+            x="295"
+            y="252"
+            textAnchor="middle"
+            fill="#232725"
+            fontFamily="'Segoe UI Semibold', 'Segoe UI', 'Inter', Arial, sans-serif"
+            fontSize="31"
+            fontWeight="600"
+            letterSpacing="4.8"
+          >
+            PHARMACEUTICALS
+          </text>
+        </svg>
+      </div>
+    );
+  }
+
+  // Compact Square Emblem Mark (Double Inverted Red & Grey Triangles + "vestas")
+  const dims = size === 'lg' ? 'w-14 h-14' : size === 'sm' ? 'w-8 h-8' : 'w-11 h-11';
   return (
     <div
-      className={`${dims} rounded-xl bg-white border border-slate-200/90 p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden`}
+      className={`${dims} rounded-xl bg-white border border-slate-200/90 p-1 flex items-center justify-center shadow-xs shrink-0 overflow-hidden select-none`}
     >
-      <img
-        src={effectiveUrl}
-        alt="Vestas Logo"
-        className="w-full h-full object-contain select-none"
-      />
+      <svg
+        viewBox="0 0 256 256"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className="w-full h-full"
+        role="img"
+        aria-label="Vestas Emblem"
+      >
+        <polygon points="24,78 232,78 128,168" fill="#7a7d80" />
+        <polygon points="18,41 238,41 128,136" fill="#ffffff" />
+        <polygon points="24,43 232,43 128,132" fill="#d63e2a" />
+        <text
+          x="130"
+          y="218"
+          textAnchor="middle"
+          fill="#1e2220"
+          fontFamily="'Segoe UI Semibold', 'Segoe UI', 'Inter', Arial, sans-serif"
+          fontSize="44"
+          fontWeight="600"
+          letterSpacing="5"
+        >
+          vestas
+        </text>
+      </svg>
     </div>
   );
 }
@@ -267,10 +358,10 @@ export default function InvoiceModal({ invoice, settings = {}, onClose }) {
               {/* TOP HEADER BOX */}
               <div className="grid grid-cols-12 border-b-2 border-slate-800 pb-3">
                 {/* Firm Details (Left 7 cols) */}
-                <div className="col-span-7 pr-3 space-y-0.5">
-                  <h1 className="text-base sm:text-lg font-black tracking-wider text-slate-900 uppercase">
-                    {bizName}
-                  </h1>
+                <div className="col-span-7 pr-3 space-y-1">
+                  <div className="flex items-center gap-3">
+                    <VestasLogo logoUrl={settings.logo_url} size="sm" variant="full" />
+                  </div>
                   <div className="text-[11px] leading-tight text-slate-800">
                     {address} &nbsp; Phone No: {phone}
                   </div>

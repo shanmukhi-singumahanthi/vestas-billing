@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 280" fill="none">
+  <!-- Double Inverted Triangle Emblem positioned above "tas" -->
+  <!-- Lower Slate-Grey Inverted Triangle / Chevron -->
+  <polygon points="334,48 518,48 426,120" fill="#7a7d80" />
+  <!-- White Separation Gap so the Red Triangle sits cleanly above the Grey V-Chevron -->
+  <polygon points="325,18 527,18 426,99" fill="#ffffff" />
+  <!-- Upper Red-Vermilion Inverted Triangle -->
+  <polygon points="334,20 518,20 426,92" fill="#d63e2a" />
+
+  <!-- Lowercase "vestas" Primary Wordmark -->
+  <text
+    x="280"
+    y="196"
+    text-anchor="middle"
+    fill="#1e2220"
+    font-family="'Segoe UI', 'Helvetica Neue', 'Inter', Arial, sans-serif"
+    font-size="112"
+    font-weight="400"
+    letter-spacing="13"
+  >vestas</text>
+
+  <!-- Uppercase "PHARMACEUTICALS" Subtitle -->
+  <text
+    x="282"
+    y="252"
+    text-anchor="middle"
+    fill="#232725"
+    font-family="'Segoe UI', 'Helvetica Neue', 'Inter', Arial, sans-serif"
+    font-size="33"
+    font-weight="500"
+    letter-spacing="3.5"
+  >PHARMACEUTICALS</text>
+</svg>

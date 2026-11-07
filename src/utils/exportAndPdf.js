@@ -205,26 +205,39 @@ export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
   doc.setFillColor(2, 132, 199); // Sky-600 Blue
   doc.rect(0, 0, 210, 3.5, 'F');
 
-  // Official Vestas Double-Triangle Emblem (Red Triangle + Grey Chevron V)
-  // Grey lower chevron V
-  doc.setFillColor(113, 113, 122);
-  doc.triangle(14, 11.5, 29, 11.5, 21.5, 20.5, 'F');
+  // Official Vestas Pharmaceuticals Lockup (Double Inverted Red & Grey Triangles over "vestas PHARMACEUTICALS")
+  // Lower Slate-Grey Inverted Triangle above "tas"
+  doc.setFillColor(122, 125, 128);
+  doc.triangle(33, 9.2, 49, 9.2, 41, 15.2, 'F');
+  // Crisp White Separation Gap
   doc.setFillColor(255, 255, 255);
-  doc.triangle(16.2, 11.2, 26.8, 11.2, 21.5, 17.6, 'F');
-  // Red upper solid inverted triangle
-  doc.setFillColor(217, 56, 30);
-  doc.triangle(14, 9.5, 29, 9.5, 21.5, 18.2, 'F');
+  doc.triangle(32.5, 6.8, 49.5, 6.8, 41, 13.1, 'F');
+  // Upper Red-Vermilion Inverted Triangle
+  doc.setFillColor(214, 62, 42);
+  doc.triangle(33, 7.0, 49, 7.0, 41, 12.8, 'F');
 
-  // Company Header next to Emblem
+  // Lowercase "vestas" Primary Wordmark
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(22);
+  doc.setTextColor(30, 34, 32);
+  doc.text('v e s t a s', 14, 18.8);
+
+  // Uppercase "PHARMACEUTICALS" Subtitle
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16.5);
+  doc.setFontSize(6.5);
+  doc.setTextColor(35, 39, 37);
+  doc.text('P H A R M A C E U T I C A L S', 14.3, 22.2);
+
+  // Firm Name & Tagline next to Lockup
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
   doc.setTextColor(15, 23, 42);
-  doc.text(bizName.toUpperCase(), 33, 14.5);
+  doc.text(bizName.toUpperCase(), 55, 14.5);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9);
   doc.setTextColor(71, 85, 105);
-  doc.text(tagline, 33, 19.8);
+  doc.text(tagline, 55, 19.5);
 
   const addrWrapped = doc.splitTextToSize(address, 96);
   doc.setFontSize(8.5);
@@ -464,22 +477,22 @@ export function downloadInvoicePDF(invoice, settings = {}, format = 'A4') {
   }
 
   // Blue Wholesale Verification Stamps (matching official printed bill)
+  const signYPos = Math.max(sumY + 14, finalY + 38);
   doc.setDrawColor(37, 99, 235);
   doc.setTextColor(37, 99, 235);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.roundedRect(14, signY - 8, 38, 14, 1, 1, 'D');
-  doc.text('CHECKED', 33, signY - 2, { align: 'center' });
-  doc.text('VERIFIED', 33, signY + 3.5, { align: 'center' });
+  doc.roundedRect(14, signYPos - 8, 38, 14, 1, 1, 'D');
+  doc.text('CHECKED', 33, signYPos - 2, { align: 'center' });
+  doc.text('VERIFIED', 33, signYPos + 3.5, { align: 'center' });
 
-  doc.roundedRect(56, signY - 8, 48, 14, 1, 1, 'D');
-  doc.text('DELIVERED', 80, signY - 2, { align: 'center' });
+  doc.roundedRect(56, signYPos - 8, 48, 14, 1, 1, 'D');
+  doc.text('DELIVERED', 80, signYPos - 2, { align: 'center' });
   doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
-  doc.text('Dt..................Sign.', 80, signY + 3.5, { align: 'center' });
+  doc.text('Dt..................Sign.', 80, signYPos + 3.5, { align: 'center' });
 
   // Authorized Signatory
-  const signYPos = Math.max(sumY + 14, finalY + 38);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);

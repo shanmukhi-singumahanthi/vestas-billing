@@ -307,7 +307,7 @@ export default function SettingsView({ settings = {}, onSettingsSaved, onFullRef
             <>
               <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200">
                 <div className="flex items-center gap-4">
-                  <VestasLogo logoUrl={form.logo_url} size="lg" />
+                  <VestasLogo logoUrl={form.logo_url} size="md" variant="full" />
                   <div>
                     <h3 className="text-base font-bold text-slate-900">
                       Company Logo & Brand Identity
