@@ -15,8 +15,13 @@ import {
   UserPlus,
   Trash2,
   Lock,
+  Mail,
+  Phone,
+  AlertCircle,
+  ExternalLink,
+  KeyRound,
 } from 'lucide-react';
-import { apiRequest } from '../utils/api';
+import { apiRequest, setAuthToken } from '../utils/api';
 import { formatDateTime } from '../utils/exportAndPdf';
 import { VestasLogo } from './InvoiceModal';
 
@@ -71,6 +76,26 @@ export default function SettingsView({ settings = {}, onSettingsSaved, onFullRef
   const [newUsername, setNewUsername] = useState('admin');
   const [fullName, setFullName] = useState('S. Satyendranath (Proprietor)');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
+  // Owner Account Recovery & Verification State
+  const [recoveryProfile, setRecoveryProfile] = useState({
+    registeredBusinessEmail: 'ssatyendranath@gmail.com',
+    recoveryEmail: 'ssatyendranath@gmail.com',
+    emailVerified: false,
+    recoveryPhone: '9603033345',
+    phoneVerified: false,
+    emailProviderConfigured: false,
+    smsProviderConfigured: false,
+  });
+  const [recoveryEmailInput, setRecoveryEmailInput] = useState('ssatyendranath@gmail.com');
+  const [emailVerifyOtp, setEmailVerifyOtp] = useState('');
+  const [emailVerificationLink, setEmailVerificationLink] = useState('');
+  const [emailVerificationPending, setEmailVerificationPending] = useState(false);
+  const [recoveryPhoneInput, setRecoveryPhoneInput] = useState('9603033345');
+  const [phoneVerifyOtp, setPhoneVerifyOtp] = useState('');
+  const [phoneOtpPending, setPhoneOtpPending] = useState(false);
+  const [securityLoading, setSecurityLoading] = useState(false);
 
   // Staff / Worker Accounts Management
   const [staffUsers, setStaffUsers] = useState([]);
@@ -118,8 +143,113 @@ export default function SettingsView({ settings = {}, onSettingsSaved, onFullRef
       apiRequest('/api/users')
         .then((res) => setStaffUsers(res || []))
         .catch(() => {});
+      apiRequest('/api/auth/recovery-settings')
+        .then((res) => {
+          if (res) {
+            setRecoveryProfile(res);
+            if (res.username) setNewUsername(res.username);
+            if (res.fullName) setFullName(res.fullName);
+            setRecoveryEmailInput(res.recoveryEmail || 'ssatyendranath@gmail.com');
+            setRecoveryPhoneInput(res.recoveryPhone || settings?.phone || '9603033345');
+          }
+        })
+        .catch(() => {});
     }
   }, [activeSection]);
+
+  const handleSendEmailVerification = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    setFeedback(null);
+    setSecurityLoading(true);
+    try {
+      const res = await apiRequest('/api/auth/recovery/email/send-verification', {
+        method: 'POST',
+        body: JSON.stringify({ email: recoveryEmailInput.trim() }),
+      });
+      setEmailVerificationPending(true);
+      if (res.verificationLink) {
+        setEmailVerificationLink(res.verificationLink);
+      }
+      setRecoveryProfile((prev) => ({
+        ...prev,
+        recoveryEmail: res.email || recoveryEmailInput.trim(),
+      }));
+      setFeedback({
+        type: 'success',
+        text: res.message || `Verification link sent to ${recoveryEmailInput.trim()}.`,
+      });
+    } catch (err) {
+      setFeedback({ type: 'error', text: err.message });
+    } finally {
+      setSecurityLoading(false);
+    }
+  };
+
+  const handleVerifyEmailCodeOrToken = async (tokenOrOtp) => {
+    setFeedback(null);
+    setSecurityLoading(true);
+    try {
+      const res = await apiRequest('/api/auth/recovery/email/verify', {
+        method: 'POST',
+        body: JSON.stringify(tokenOrOtp),
+      });
+      setRecoveryProfile((prev) => ({
+        ...prev,
+        recoveryEmail: res.recoveryEmail,
+        emailVerified: true,
+      }));
+      setEmailVerificationPending(false);
+      setEmailVerificationLink('');
+      setEmailVerifyOtp('');
+      setFeedback({ type: 'success', text: res.message });
+    } catch (err) {
+      setFeedback({ type: 'error', text: err.message });
+    } finally {
+      setSecurityLoading(false);
+    }
+  };
+
+  const handleSendPhoneVerificationOtp = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    setFeedback(null);
+    setSecurityLoading(true);
+    try {
+      const res = await apiRequest('/api/auth/recovery/phone/send-otp', {
+        method: 'POST',
+        body: JSON.stringify({ phone: recoveryPhoneInput.trim() }),
+      });
+      setPhoneOtpPending(true);
+      setFeedback({ type: 'success', text: res.message });
+    } catch (err) {
+      setFeedback({ type: 'error', text: err.message });
+    } finally {
+      setSecurityLoading(false);
+    }
+  };
+
+  const handleVerifyPhoneOtp = async (e) => {
+    e.preventDefault();
+    setFeedback(null);
+    setSecurityLoading(true);
+    try {
+      const res = await apiRequest('/api/auth/recovery/phone/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({ otp: phoneVerifyOtp.trim() }),
+      });
+      setRecoveryProfile((prev) => ({
+        ...prev,
+        recoveryPhone: res.recoveryPhone,
+        phoneVerified: true,
+      }));
+      setPhoneOtpPending(false);
+      setPhoneVerifyOtp('');
+      setFeedback({ type: 'success', text: res.message });
+    } catch (err) {
+      setFeedback({ type: 'error', text: err.message });
+    } finally {
+      setSecurityLoading(false);
+    }
+  };
 
   const handleAddStaffUser = async (e) => {
     e.preventDefault();
@@ -189,6 +319,13 @@ export default function SettingsView({ settings = {}, onSettingsSaved, onFullRef
   const handleUpdateCredentials = async (e) => {
     e.preventDefault();
     setFeedback(null);
+    if (newPassword && newPassword !== confirmNewPassword) {
+      setFeedback({
+        type: 'error',
+        text: 'New password and confirm new password do not match.',
+      });
+      return;
+    }
     try {
       const res = await apiRequest('/api/auth/password', {
         method: 'PUT',
@@ -199,9 +336,13 @@ export default function SettingsView({ settings = {}, onSettingsSaved, onFullRef
           newPassword,
         }),
       });
+      if (res.token) {
+        setAuthToken(res.token);
+      }
       setFeedback({ type: 'success', text: res.message });
       setCurrentPassword('');
       setNewPassword('');
+      setConfirmNewPassword('');
     } catch (err) {
       setFeedback({ type: 'error', text: err.message });
     }
@@ -681,82 +822,320 @@ export default function SettingsView({ settings = {}, onSettingsSaved, onFullRef
       )}
 
       {activeSection === 'security' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-          {/* 1. Single Owner Account Security */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
-            <div className="flex items-center gap-2 mb-1">
-              <Shield className="w-5 h-5 text-amber-600" />
-              <h3 className="text-base font-bold text-slate-900">
-                Single Owner Account Security
-              </h3>
+        <div className="space-y-6">
+          {/* Top Row: Owner Account Recovery (Email & Mobile Verification) + Owner Password Update */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            {/* 1. Owner Account Recovery (Verified Email & Mobile OTP Settings) */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-5 text-xs">
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center gap-2">
+                    <Mail className="w-5 h-5 text-sky-600" />
+                    <h3 className="text-base font-bold text-slate-900">
+                      Owner Account Recovery & Verification
+                    </h3>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                    Owner-Only
+                  </span>
+                </div>
+                <p className="text-slate-500">
+                  Only verified email addresses and mobile numbers can be used to reset the owner
+                  password via Forgot Password.
+                </p>
+              </div>
+
+              {/* Registered Business Email Summary */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    Registered Business Email
+                  </div>
+                  <div className="text-xs font-bold text-slate-900 mt-0.5">
+                    {recoveryProfile.registeredBusinessEmail || 'ssatyendranath@gmail.com'}
+                  </div>
+                </div>
+                <span
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                    recoveryProfile.emailVerified
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                  }`}
+                >
+                  {recoveryProfile.emailVerified ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Email Verified
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      Verification Required
+                    </>
+                  )}
+                </span>
+              </div>
+
+              {/* A. Recovery Email Configuration & Verification */}
+              <div className="p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <Mail className="w-4 h-4 text-sky-600" />
+                    A. Owner Recovery Email
+                  </span>
+                  {recoveryProfile.emailVerified &&
+                    recoveryEmailInput.trim().toLowerCase() ===
+                      (recoveryProfile.recoveryEmail || '').toLowerCase() && (
+                      <span className="text-[11px] font-bold text-emerald-700">
+                        ✓ Active for Forgot Password
+                      </span>
+                    )}
+                </div>
+
+                <form onSubmit={handleSendEmailVerification} className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="email"
+                    required
+                    value={recoveryEmailInput}
+                    onChange={(e) => setRecoveryEmailInput(e.target.value)}
+                    placeholder="ssatyendranath@gmail.com"
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-300 outline-none focus:border-sky-600"
+                  />
+                  <button
+                    type="submit"
+                    disabled={securityLoading}
+                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-bold cursor-pointer shrink-0"
+                  >
+                    {recoveryProfile.emailVerified &&
+                    recoveryEmailInput.trim().toLowerCase() ===
+                      (recoveryProfile.recoveryEmail || '').toLowerCase()
+                      ? 'Re-Verify Email'
+                      : 'Send Verification Link'}
+                  </button>
+                </form>
+
+                {emailVerificationLink && (
+                  <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 space-y-2">
+                    <div className="font-bold text-sky-900 flex items-center gap-1.5">
+                      <ExternalLink className="w-3.5 h-3.5 text-sky-600" />
+                      Verification Link Generated for {recoveryEmailInput}
+                    </div>
+                    <p className="text-[11px] text-sky-800 leading-relaxed">
+                      Click the verification button below to verify{' '}
+                      <strong>{recoveryEmailInput}</strong> and enable Email Password Recovery:
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const urlObj = new URL(emailVerificationLink);
+                          const t = urlObj.searchParams.get('verify_email_token');
+                          if (t) handleVerifyEmailCodeOrToken({ token: t });
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Click to Verify {recoveryEmailInput} Now
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {emailVerificationPending && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleVerifyEmailCodeOrToken({ otp: emailVerifyOtp.trim() });
+                    }}
+                    className="flex gap-2 pt-1"
+                  >
+                    <input
+                      type="text"
+                      maxLength={6}
+                      value={emailVerifyOtp}
+                      onChange={(e) => setEmailVerifyOtp(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Or enter 6-digit email verification code"
+                      className="flex-1 px-3 py-2 rounded-xl border border-slate-300 font-mono outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={securityLoading || emailVerifyOtp.length !== 6}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold cursor-pointer"
+                    >
+                      Verify Code
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              {/* B. Recovery Mobile Number Configuration & SMS OTP Verification */}
+              <div className="p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <Phone className="w-4 h-4 text-emerald-600" />
+                    B. Owner Recovery Mobile Number (SMS OTP)
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      recoveryProfile.phoneVerified
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    {recoveryProfile.phoneVerified ? '✓ Mobile Verified' : 'Unverified'}
+                  </span>
+                </div>
+
+                <form
+                  onSubmit={handleSendPhoneVerificationOtp}
+                  className="flex flex-col sm:flex-row gap-2"
+                >
+                  <input
+                    type="tel"
+                    required
+                    value={recoveryPhoneInput}
+                    onChange={(e) => setRecoveryPhoneInput(e.target.value)}
+                    placeholder="Enter 10-digit mobile number (e.g. 9603033345)"
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-300 outline-none focus:border-emerald-600"
+                  />
+                  <button
+                    type="submit"
+                    disabled={securityLoading}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold cursor-pointer shrink-0"
+                  >
+                    Send SMS OTP
+                  </button>
+                </form>
+
+                {!recoveryProfile.smsProviderConfigured && (
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-900 leading-relaxed">
+                    <strong>SMS Provider Configuration Notice:</strong> Live SMS OTP delivery
+                    requires configuring an SMS provider in your server environment variables (
+                    <code>TWILIO_ACCOUNT_SID</code>, <code>TWILIO_AUTH_TOKEN</code>,{' '}
+                    <code>TWILIO_PHONE_NUMBER</code> or <code>FAST2SMS_API_KEY</code>).
+                  </div>
+                )}
+
+                {phoneOtpPending && (
+                  <form onSubmit={handleVerifyPhoneOtp} className="flex gap-2 pt-1">
+                    <input
+                      type="text"
+                      maxLength={6}
+                      required
+                      value={phoneVerifyOtp}
+                      onChange={(e) => setPhoneVerifyOtp(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Enter 6-digit SMS OTP"
+                      className="flex-1 px-3 py-2 rounded-xl border border-slate-300 font-mono outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={securityLoading || phoneVerifyOtp.length !== 6}
+                      className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-bold cursor-pointer"
+                    >
+                      Verify Mobile OTP
+                    </button>
+                  </form>
+                )}
+              </div>
             </div>
-            <p className="text-xs text-slate-500 mb-5">
-              Exclusive proprietor login for S. Satyendranath. Update your owner username, display
-              name, or password below.
-            </p>
 
-            <form onSubmit={handleUpdateCredentials} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Owner Display Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-                />
+            {/* 2. Change Owner Password & Login Credentials */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
+              <div className="flex items-center gap-2 mb-1">
+                <Shield className="w-5 h-5 text-amber-600" />
+                <h3 className="text-base font-bold text-slate-900">
+                  Change Owner Password & Login Profile
+                </h3>
               </div>
+              <p className="text-xs text-slate-500 mb-5">
+                Exclusive proprietor login for S. Satyendranath. Changing your password
+                automatically signs out any old sessions on other devices.
+              </p>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Owner Username</label>
-                <input
-                  type="text"
-                  required
-                  value={newUsername}
-                  onChange={(e) => setNewUsername(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-                />
-              </div>
+              <form onSubmit={handleUpdateCredentials} className="space-y-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Owner Display Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                    />
+                  </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Current Password *
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Enter current password to confirm changes"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-                />
-              </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Owner Username
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newUsername}
+                      onChange={(e) => setNewUsername(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                    />
+                  </div>
+                </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  New Password (leave blank to keep current)
-                </label>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
-                />
-              </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Current Password *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    placeholder="Enter current password to confirm changes"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                  />
+                </div>
 
-              <button
-                type="submit"
-                className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold cursor-pointer"
-              >
-                Update Owner Security Credentials
-              </button>
-            </form>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      New Password (min 6 chars)
+                    </label>
+                    <input
+                      type="password"
+                      minLength={6}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Leave blank to keep current"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Confirm New Password
+                    </label>
+                    <input
+                      type="password"
+                      minLength={6}
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                      placeholder="Confirm new password"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold cursor-pointer"
+                >
+                  <KeyRound className="w-4 h-4" />
+                  Update Owner Security Credentials
+                </button>
+              </form>
+            </div>
           </div>
 
-          {/* 2. Counter Staff & Chemist Accounts (Role: Worker) */}
+          {/* 3. Counter Staff & Chemist Accounts (Role: Worker) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-6">
             <div>
               <div className="flex items-center gap-2 mb-1">

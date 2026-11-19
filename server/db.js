@@ -170,14 +170,39 @@ async function initializeSchema(db) {
       Number(row.users_count) >= 2 &&
       Number(row.products_count) >= 4
     ) {
-      // Ensure performance indexes exist (idempotent & single round-trip)
+      // Ensure performance indexes and account recovery schema exist (idempotent & single round-trip)
       await db.exec(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_email VARCHAR(150) DEFAULT '';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_email VARCHAR(150) DEFAULT '';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_phone VARCHAR(50) DEFAULT '';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN DEFAULT FALSE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_phone VARCHAR(50) DEFAULT '';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT DEFAULT 1;
+
+        CREATE TABLE IF NOT EXISTS account_recovery_tokens (
+          id SERIAL PRIMARY KEY,
+          user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash VARCHAR(255) NOT NULL,
+          token_type VARCHAR(50) NOT NULL,
+          target_value VARCHAR(150) DEFAULT '',
+          attempts INT DEFAULT 0,
+          used BOOLEAN DEFAULT FALSE,
+          expires_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        UPDATE users
+        SET recovery_email = 'ssatyendranath@gmail.com'
+        WHERE role = 'owner' AND (recovery_email IS NULL OR recovery_email = '' OR recovery_email = 'ssatyendranth@gmail.com');
+
         CREATE INDEX IF NOT EXISTS idx_products_name_batch ON products (LOWER(name), LOWER(batch_number));
         CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoices (created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices (customer_id);
         CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_id ON invoice_items (invoice_id);
         CREATE INDEX IF NOT EXISTS idx_stock_movements_created_at ON stock_movements (created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_stock_movements_product_id ON stock_movements (product_id);
+        CREATE INDEX IF NOT EXISTS idx_recovery_tokens_hash ON account_recovery_tokens (token_hash);
       `);
       return;
     }
@@ -192,6 +217,25 @@ async function initializeSchema(db) {
       password_hash VARCHAR(255) NOT NULL,
       full_name VARCHAR(150) NOT NULL,
       role VARCHAR(50) DEFAULT 'owner',
+      recovery_email VARCHAR(150) DEFAULT '',
+      email_verified BOOLEAN DEFAULT FALSE,
+      pending_email VARCHAR(150) DEFAULT '',
+      recovery_phone VARCHAR(50) DEFAULT '',
+      phone_verified BOOLEAN DEFAULT FALSE,
+      pending_phone VARCHAR(50) DEFAULT '',
+      token_version INT DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS account_recovery_tokens (
+      id SERIAL PRIMARY KEY,
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash VARCHAR(255) NOT NULL,
+      token_type VARCHAR(50) NOT NULL,
+      target_value VARCHAR(150) DEFAULT '',
+      attempts INT DEFAULT 0,
+      used BOOLEAN DEFAULT FALSE,
+      expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -376,6 +420,13 @@ async function initializeSchema(db) {
     ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS sgst_percent NUMERIC(5,2) DEFAULT 0.00;
     ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS sgst_amount NUMERIC(12,2) DEFAULT 0.00;
     ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS client_operation_id VARCHAR(120);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_email VARCHAR(150) DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_email VARCHAR(150) DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_phone VARCHAR(50) DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_phone VARCHAR(50) DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT DEFAULT 1;
 
     CREATE INDEX IF NOT EXISTS idx_products_name_batch ON products (LOWER(name), LOWER(batch_number));
     CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoices (created_at DESC);
@@ -383,6 +434,7 @@ async function initializeSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_id ON invoice_items (invoice_id);
     CREATE INDEX IF NOT EXISTS idx_stock_movements_created_at ON stock_movements (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_stock_movements_product_id ON stock_movements (product_id);
+    CREATE INDEX IF NOT EXISTS idx_recovery_tokens_hash ON account_recovery_tokens (token_hash);
   `);
 
   // Ensure Default Owner and Worker accounts exist
@@ -390,9 +442,15 @@ async function initializeSchema(db) {
   if (ownerCheck.rows.length === 0) {
     const ownerHash = await bcrypt.hash('vestas123', 10);
     await db.query(
-      `INSERT INTO users (username, password_hash, full_name, role)
-       VALUES ($1, $2, $3, 'owner')`,
+      `INSERT INTO users (username, password_hash, full_name, role, recovery_email, email_verified)
+       VALUES ($1, $2, $3, 'owner', 'ssatyendranath@gmail.com', FALSE)`,
       ['admin', ownerHash, 'S. Satyendranath (Proprietor)']
+    );
+  } else {
+    await db.query(
+      `UPDATE users
+       SET recovery_email = 'ssatyendranath@gmail.com'
+       WHERE role = 'owner' AND (recovery_email IS NULL OR recovery_email = '' OR recovery_email = 'ssatyendranth@gmail.com')`
     );
   }
 

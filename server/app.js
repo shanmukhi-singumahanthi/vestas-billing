@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -24,6 +25,9 @@ app.use(express.json({ limit: '25mb' }));
 
 app.use('/uploads', express.static(path.join(__dirname, '..', 'data')));
 
+// Track latest required owner token version in memory for instant session invalidation after password reset
+let minValidOwnerTokenVersion = 1;
+
 // Single Owner Authentication Middleware
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -35,9 +39,179 @@ function authenticateToken(req, res, next) {
     if (err) {
       return res.status(403).json({ error: 'Session expired or invalid token. Please log in again.' });
     }
+    if (
+      user?.role === 'owner' &&
+      user?.tokenVersion &&
+      Number(user.tokenVersion) < minValidOwnerTokenVersion
+    ) {
+      return res.status(401).json({
+        error: 'Session invalidated after password change/reset. Please log in again.',
+      });
+    }
     req.user = user;
     next();
   });
+}
+
+// ==========================================
+// ACCOUNT RECOVERY SECURITY HELPERS (HASHING, RATE LIMITING, EMAIL & SMS)
+// ==========================================
+const rateLimitStore = new Map();
+
+function checkRateLimit(key, maxRequests = 5, windowMs = 15 * 60 * 1000) {
+  const now = Date.now();
+  const entry = rateLimitStore.get(key) || { count: 0, resetAt: now + windowMs, lastRequestAt: 0 };
+  if (now > entry.resetAt) {
+    entry.count = 0;
+    entry.resetAt = now + windowMs;
+  }
+  entry.count += 1;
+  const prevRequestAt = entry.lastRequestAt;
+  entry.lastRequestAt = now;
+  rateLimitStore.set(key, entry);
+
+  const retryAfterSec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+  return {
+    allowed: entry.count <= maxRequests,
+    remaining: Math.max(0, maxRequests - entry.count),
+    retryAfterSec,
+    secondsSinceLast: prevRequestAt ? Math.floor((now - prevRequestAt) / 1000) : 9999,
+  };
+}
+
+function sha256Hash(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+function generateSecureHexToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString('hex');
+}
+
+function generateSixDigitOtp() {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+function normalizePhone(phone = '') {
+  const digits = String(phone).replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return digits.slice(2);
+  }
+  return digits;
+}
+
+function isEmailProviderConfigured() {
+  return Boolean(
+    process.env.RESEND_API_KEY ||
+      process.env.BREVO_API_KEY ||
+      process.env.EMAIL_WEBHOOK_URL
+  );
+}
+
+function isSmsProviderConfigured() {
+  return Boolean(
+    (process.env.TWILIO_ACCOUNT_SID &&
+      process.env.TWILIO_AUTH_TOKEN &&
+      process.env.TWILIO_PHONE_NUMBER) ||
+      process.env.FAST2SMS_API_KEY
+  );
+}
+
+async function dispatchOwnerEmail({ to, subject, html, text }) {
+  try {
+    if (process.env.RESEND_API_KEY) {
+      const fromAddr = process.env.EMAIL_FROM || 'Vestas Pharmaceuticals <onboarding@resend.dev>';
+      const resp = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ from: fromAddr, to: [to], subject, html, text }),
+      });
+      if (resp.ok) return { delivered: true, provider: 'resend' };
+    }
+    if (process.env.BREVO_API_KEY) {
+      const senderEmail = process.env.EMAIL_FROM_ADDRESS || 'ssatyendranath@gmail.com';
+      const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': process.env.BREVO_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: { name: 'Vestas Pharmaceuticals Security', email: senderEmail },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+          textContent: text,
+        }),
+      });
+      if (resp.ok) return { delivered: true, provider: 'brevo' };
+    }
+    if (process.env.EMAIL_WEBHOOK_URL) {
+      const resp = await fetch(process.env.EMAIL_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, subject, html, text }),
+      });
+      if (resp.ok) return { delivered: true, provider: 'webhook' };
+    }
+  } catch (err) {
+    console.error('Email dispatch warning:', err.message);
+  }
+  return { delivered: false, provider: 'none' };
+}
+
+async function dispatchOwnerSms({ to, otp, message }) {
+  const cleanDigits = normalizePhone(to);
+  const e164 = cleanDigits.length === 10 ? `+91${cleanDigits}` : `+${cleanDigits}`;
+  try {
+    if (
+      process.env.TWILIO_ACCOUNT_SID &&
+      process.env.TWILIO_AUTH_TOKEN &&
+      process.env.TWILIO_PHONE_NUMBER
+    ) {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const auth = Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
+      const bodyParams = new URLSearchParams({
+        To: e164,
+        From: process.env.TWILIO_PHONE_NUMBER,
+        Body: message,
+      });
+      const resp = await fetch(
+        `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${auth}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: bodyParams.toString(),
+        }
+      );
+      if (resp.ok) return { delivered: true, provider: 'twilio' };
+    }
+    if (process.env.FAST2SMS_API_KEY) {
+      const resp = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+        method: 'POST',
+        headers: {
+          authorization: process.env.FAST2SMS_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          route: 'q',
+          message,
+          language: 'english',
+          flash: 0,
+          numbers: cleanDigits,
+        }),
+      });
+      if (resp.ok) return { delivered: true, provider: 'fast2sms' };
+    }
+  } catch (err) {
+    console.error('SMS dispatch warning:', err.message);
+  }
+  return { delivered: false, provider: 'none', otpConfigured: isSmsProviderConfigured() };
 }
 
 export function requireOwner(req, res, next) {
@@ -151,8 +325,18 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const userRole = user.role || 'worker';
+    const tokenVersion = Number(user.token_version || 1);
+    if (userRole === 'owner' && tokenVersion > minValidOwnerTokenVersion) {
+      minValidOwnerTokenVersion = tokenVersion;
+    }
     const token = jwt.sign(
-      { id: user.id, username: user.username, fullName: user.full_name, role: userRole },
+      {
+        id: user.id,
+        username: user.username,
+        fullName: user.full_name,
+        role: userRole,
+        tokenVersion,
+      },
       JWT_SECRET,
       { expiresIn: '30d' }
     );
@@ -185,13 +369,22 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
     const db = await getDb();
     const result = await db.query(
-      'SELECT id, username, full_name, role, created_at FROM users WHERE id = $1',
+      'SELECT id, username, full_name, role, token_version, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User account not found.' });
     }
     const u = result.rows[0];
+    const currentVersion = Number(u.token_version || 1);
+    if (u.role === 'owner' && currentVersion > minValidOwnerTokenVersion) {
+      minValidOwnerTokenVersion = currentVersion;
+    }
+    if (req.user.tokenVersion && Number(req.user.tokenVersion) < currentVersion) {
+      return res.status(401).json({
+        error: 'Your session expired because the account password was changed or reset. Please sign in again.',
+      });
+    }
     res.json({
       id: u.id,
       username: u.username,
@@ -316,11 +509,11 @@ app.delete('/api/users/:id', authenticateToken, requireOwner, async (req, res) =
   }
 });
 
-app.put('/api/auth/password', authenticateToken, async (req, res) => {
+app.put('/api/auth/password', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { currentPassword, newPassword, newUsername, fullName } = req.body;
     const db = await getDb();
-    const userRes = await db.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
+    const userRes = await db.query("SELECT * FROM users WHERE id = $1 AND role = 'owner'", [req.user.id]);
     if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'Owner account not found.' });
     }
@@ -330,22 +523,919 @@ app.put('/api/auth/password', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Current password is incorrect.' });
     }
 
+    if (newPassword && String(newPassword).trim().length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+    }
+
     const updatedUsername = (newUsername || user.username).trim();
     const updatedFullName = (fullName || user.full_name).trim();
-    const updatedHash = newPassword ? await bcrypt.hash(newPassword, 10) : user.password_hash;
+    const isPasswordChanged = Boolean(newPassword && String(newPassword).trim());
+    const updatedHash = isPasswordChanged
+      ? await bcrypt.hash(String(newPassword).trim(), 10)
+      : user.password_hash;
+    const nextTokenVersion = isPasswordChanged
+      ? Number(user.token_version || 1) + 1
+      : Number(user.token_version || 1);
 
     await db.query(
-      'UPDATE users SET username = $1, password_hash = $2, full_name = $3 WHERE id = $4',
-      [updatedUsername, updatedHash, updatedFullName, user.id]
+      'UPDATE users SET username = $1, password_hash = $2, full_name = $3, token_version = $4 WHERE id = $5',
+      [updatedUsername, updatedHash, updatedFullName, nextTokenVersion, user.id]
+    );
+    minValidOwnerTokenVersion = nextTokenVersion;
+
+    const freshToken = jwt.sign(
+      {
+        id: user.id,
+        username: updatedUsername,
+        fullName: updatedFullName,
+        role: 'owner',
+        tokenVersion: nextTokenVersion,
+      },
+      JWT_SECRET,
+      { expiresIn: '30d' }
     );
 
     await db.query(
       `INSERT INTO audit_logs (action_type, entity_type, entity_id, description, performed_by)
        VALUES ('SECURITY_UPDATE', 'USER', $1, $2, $3)`,
-      [String(user.id), `Updated owner credentials for ${updatedUsername}`, updatedFullName]
+      [
+        String(user.id),
+        `Updated owner credentials for ${updatedUsername}${isPasswordChanged ? ' (password changed & old sessions invalidated)' : ''}`,
+        updatedFullName,
+      ]
     );
 
-    res.json({ message: 'Owner security credentials updated successfully.' });
+    res.json({
+      message: isPasswordChanged
+        ? 'Owner password updated successfully. All other active sessions have been signed out.'
+        : 'Owner security profile updated successfully.',
+      token: freshToken,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 1B. OWNER ACCOUNT RECOVERY & VERIFICATION ROUTES (OWNER-ONLY)
+// ==========================================
+
+// Get Owner Account Security & Verification Settings
+app.get('/api/auth/recovery-settings', authenticateToken, requireOwner, async (req, res) => {
+  try {
+    const db = await getDb();
+    const [ownerRes, settingsRes] = await Promise.all([
+      db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1"),
+      db.query('SELECT email, phone FROM settings WHERE id = 1'),
+    ]);
+    if (ownerRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Owner account not found.' });
+    }
+    const owner = ownerRes.rows[0];
+    const storeSettings = settingsRes.rows[0] || {};
+    const recoveryEmail = owner.recovery_email || 'ssatyendranath@gmail.com';
+    const recoveryPhone = owner.recovery_phone || '';
+
+    res.json({
+      id: owner.id,
+      username: owner.username,
+      fullName: owner.full_name,
+      registeredBusinessEmail: storeSettings.email || 'ssatyendranath@gmail.com',
+      recoveryEmail,
+      emailVerified: Boolean(owner.email_verified),
+      pendingEmail: owner.pending_email || '',
+      recoveryPhone,
+      phoneVerified: Boolean(owner.phone_verified),
+      pendingPhone: owner.pending_phone || '',
+      emailProviderConfigured: isEmailProviderConfigured(),
+      smsProviderConfigured: isSmsProviderConfigured(),
+      requiredSmsEnvVars: [
+        'TWILIO_ACCOUNT_SID',
+        'TWILIO_AUTH_TOKEN',
+        'TWILIO_PHONE_NUMBER',
+        'or FAST2SMS_API_KEY',
+      ],
+      requiredEmailEnvVars: ['RESEND_API_KEY or BREVO_API_KEY'],
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send Email Verification Link & 6-Digit Verification OTP to Owner Recovery Email
+app.post(
+  '/api/auth/recovery/email/send-verification',
+  authenticateToken,
+  requireOwner,
+  async (req, res) => {
+    try {
+      const rawEmail = (req.body?.email || 'ssatyendranath@gmail.com').trim().toLowerCase();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(rawEmail)) {
+        return res.status(400).json({ error: 'Please enter a valid recovery email address.' });
+      }
+
+      const rl = checkRateLimit(`verify_email_owner_${req.user.id}`, 5, 15 * 60 * 1000);
+      if (!rl.allowed) {
+        return res.status(429).json({
+          error: `Too many verification requests. Please wait ${rl.retryAfterSec} seconds before trying again.`,
+        });
+      }
+      if (rl.secondsSinceLast < 30 && !req.body?.forceResend) {
+        return res.status(429).json({
+          error: `Please wait ${30 - rl.secondsSinceLast} seconds before requesting another verification email.`,
+        });
+      }
+
+      const db = await getDb();
+      const ownerRes = await db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1");
+      if (ownerRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Owner account not found.' });
+      }
+      const owner = ownerRes.rows[0];
+
+      // If changing to a different email, reset email_verified until verified
+      const isDifferentEmail =
+        (owner.recovery_email || '').toLowerCase() !== rawEmail.toLowerCase();
+      await db.query(
+        `UPDATE users SET
+          recovery_email = $1,
+          pending_email = $1,
+          email_verified = CASE WHEN $2 THEN FALSE ELSE email_verified END
+         WHERE id = $3`,
+        [rawEmail, isDifferentEmail, owner.id]
+      );
+
+      // Invalidate previous unused EMAIL_VERIFY tokens
+      await db.query(
+        "UPDATE account_recovery_tokens SET used = TRUE WHERE user_id = $1 AND token_type = 'EMAIL_VERIFY' AND used = FALSE",
+        [owner.id]
+      );
+
+      const linkToken = generateSecureHexToken(32);
+      const otpCode = generateSixDigitOtp();
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 minutes
+
+      await db.query(
+        `INSERT INTO account_recovery_tokens (user_id, token_hash, token_type, target_value, expires_at)
+         VALUES ($1, $2, 'EMAIL_VERIFY', $3, $4), ($1, $5, 'EMAIL_VERIFY', $3, $4)`,
+        [owner.id, sha256Hash(linkToken), rawEmail, expiresAt, sha256Hash(otpCode)]
+      );
+
+      const origin =
+        req.headers.origin ||
+        (req.headers.host ? `${req.protocol || 'https'}://${req.headers.host}` : 'https://vestas-billing.vercel.app');
+      const verificationLink = `${origin}/?verify_email_token=${linkToken}`;
+
+      const dispatchResult = await dispatchOwnerEmail({
+        to: rawEmail,
+        subject: 'Verify Your Owner Recovery Email — Vestas Pharmaceuticals',
+        html: `
+          <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:16px;">
+            <h2 style="color:#0f172a;margin-top:0;">Vestas Pharmaceuticals — Owner Account Security</h2>
+            <p style="color:#334155;font-size:14px;">Click the secure link below or enter the 6-digit verification code in Settings &rarr; Account Security to verify <strong>${rawEmail}</strong> as your Owner Recovery Email:</p>
+            <p style="margin:20px 0;"><a href="${verificationLink}" style="background:#0284c7;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:bold;display:inline-block;">Verify Recovery Email</a></p>
+            <p style="color:#334155;font-size:14px;">Or enter verification OTP: <strong style="font-size:18px;letter-spacing:2px;color:#0f172a;">${otpCode}</strong></p>
+            <p style="color:#64748b;font-size:12px;">This verification link and code expire in 30 minutes.</p>
+          </div>
+        `,
+        text: `Vestas Pharmaceuticals Owner Recovery Email Verification\nVerify link: ${verificationLink}\nVerification Code: ${otpCode}\nExpires in 30 minutes.`,
+      });
+
+      await db.query(
+        `INSERT INTO audit_logs (action_type, entity_type, entity_id, description, performed_by)
+         VALUES ('SEND_EMAIL_VERIFICATION', 'USER', $1, $2, $3)`,
+        [
+          String(owner.id),
+          `Sent recovery email verification link to ${rawEmail}`,
+          owner.full_name,
+        ]
+      );
+
+      res.json({
+        success: true,
+        email: rawEmail,
+        deliveredViaProvider: dispatchResult.delivered,
+        provider: dispatchResult.provider,
+        expiresAt,
+        // Since the owner is already authenticated inside Owner Account Security Settings,
+        // provide the verification link when external SMTP is not configured so the owner can verify immediately.
+        verificationLink: !dispatchResult.delivered ? verificationLink : undefined,
+        message: dispatchResult.delivered
+          ? `Verification link and 6-digit code sent to ${rawEmail}.`
+          : `Verification link generated for ${rawEmail}. Click the verification link below to complete email verification.`,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Verify Owner Recovery Email via Verification Link Token or 6-Digit OTP
+app.post('/api/auth/recovery/email/verify', async (req, res) => {
+  try {
+    const rawCode = String(req.body?.token || req.body?.otp || '').trim();
+    if (!rawCode) {
+      return res.status(400).json({ error: 'Verification token or 6-digit OTP is required.' });
+    }
+
+    const db = await getDb();
+    const ownerRes = await db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1");
+    if (ownerRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Owner account not found.' });
+    }
+    const owner = ownerRes.rows[0];
+
+    const tokenHash = sha256Hash(rawCode);
+    const tokenRes = await db.query(
+      `SELECT * FROM account_recovery_tokens
+       WHERE user_id = $1 AND token_type = 'EMAIL_VERIFY' AND used = FALSE
+       ORDER BY created_at DESC`,
+      [owner.id]
+    );
+
+    if (tokenRes.rows.length === 0) {
+      return res.status(400).json({
+        error: 'No active email verification request found. Please send a new verification link.',
+      });
+    }
+
+    const matched = tokenRes.rows.find((r) => r.token_hash === tokenHash);
+    if (!matched) {
+      // Increment attempts on active verification tokens
+      const latest = tokenRes.rows[0];
+      const nextAttempts = Number(latest.attempts || 0) + 1;
+      await db.query(
+        'UPDATE account_recovery_tokens SET attempts = $1, used = CASE WHEN $1 >= 5 THEN TRUE ELSE used END WHERE id = $2',
+        [nextAttempts, latest.id]
+      );
+      if (nextAttempts >= 5) {
+        return res.status(429).json({
+          error: 'Maximum verification attempts exceeded. Please request a new verification link.',
+        });
+      }
+      return res.status(400).json({ error: 'Invalid verification link or OTP code.' });
+    }
+
+    if (new Date(matched.expires_at) < new Date()) {
+      await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [matched.id]);
+      return res.status(400).json({
+        error: 'This verification link or code has expired. Please request a new one.',
+      });
+    }
+
+    const verifiedEmail = matched.target_value || owner.recovery_email || 'ssatyendranath@gmail.com';
+    await db.query(
+      `UPDATE users SET recovery_email = $1, email_verified = TRUE, pending_email = '' WHERE id = $2`,
+      [verifiedEmail, owner.id]
+    );
+    await db.query(
+      "UPDATE account_recovery_tokens SET used = TRUE WHERE user_id = $1 AND token_type = 'EMAIL_VERIFY'",
+      [owner.id]
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (action_type, entity_type, entity_id, description, performed_by)
+       VALUES ('EMAIL_VERIFIED', 'USER', $1, $2, $3)`,
+      [
+        String(owner.id),
+        `Verified owner recovery email: ${verifiedEmail}`,
+        owner.full_name,
+      ]
+    );
+
+    res.json({
+      success: true,
+      recoveryEmail: verifiedEmail,
+      emailVerified: true,
+      message: `Owner recovery email (${verifiedEmail}) verified successfully. Email password recovery is now enabled.`,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send SMS OTP to Verify Owner Recovery Mobile Number
+app.post(
+  '/api/auth/recovery/phone/send-otp',
+  authenticateToken,
+  requireOwner,
+  async (req, res) => {
+    try {
+      const cleanPhone = normalizePhone(req.body?.phone || '');
+      if (cleanPhone.length < 10 || cleanPhone.length > 15) {
+        return res.status(400).json({
+          error: 'Please enter a valid 10-digit mobile number for SMS OTP verification.',
+        });
+      }
+
+      const rl = checkRateLimit(`verify_phone_owner_${req.user.id}`, 5, 15 * 60 * 1000);
+      if (!rl.allowed) {
+        return res.status(429).json({
+          error: `OTP rate limit reached. Please wait ${rl.retryAfterSec} seconds before requesting another OTP.`,
+        });
+      }
+      if (rl.secondsSinceLast < 30 && !req.body?.forceResend) {
+        return res.status(429).json({
+          error: `Please wait ${30 - rl.secondsSinceLast} seconds before resending SMS OTP.`,
+        });
+      }
+
+      const db = await getDb();
+      const ownerRes = await db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1");
+      if (ownerRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Owner account not found.' });
+      }
+      const owner = ownerRes.rows[0];
+
+      const isDifferentPhone = normalizePhone(owner.recovery_phone) !== cleanPhone;
+      await db.query(
+        `UPDATE users SET
+          recovery_phone = $1,
+          pending_phone = $1,
+          phone_verified = CASE WHEN $2 THEN FALSE ELSE phone_verified END
+         WHERE id = $3`,
+        [cleanPhone, isDifferentPhone, owner.id]
+      );
+
+      const smsConfigured = isSmsProviderConfigured();
+      if (!smsConfigured && !req.body?.sandboxTest) {
+        return res.status(400).json({
+          error:
+            'SMS provider is not configured on the server yet. Please configure Twilio (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER) or Fast2SMS (FAST2SMS_API_KEY) environment variables, or use Owner Verification Sandbox to test the OTP flow.',
+          smsProviderConfigured: false,
+          requiredEnvVars: [
+            'TWILIO_ACCOUNT_SID',
+            'TWILIO_AUTH_TOKEN',
+            'TWILIO_PHONE_NUMBER',
+            'or FAST2SMS_API_KEY',
+          ],
+        });
+      }
+
+      await db.query(
+        "UPDATE account_recovery_tokens SET used = TRUE WHERE user_id = $1 AND token_type = 'PHONE_VERIFY' AND used = FALSE",
+        [owner.id]
+      );
+
+      const otpCode = generateSixDigitOtp();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutes
+
+      await db.query(
+        `INSERT INTO account_recovery_tokens (user_id, token_hash, token_type, target_value, expires_at)
+         VALUES ($1, $2, 'PHONE_VERIFY', $3, $4)`,
+        [owner.id, sha256Hash(otpCode), cleanPhone, expiresAt]
+      );
+
+      const smsResult = await dispatchOwnerSms({
+        to: cleanPhone,
+        otp: otpCode,
+        message: `Vestas Pharmaceuticals Owner Security: Your mobile verification OTP is ${otpCode}. Valid for 5 minutes. Do not share this code.`,
+      });
+
+      res.json({
+        success: true,
+        phone: cleanPhone,
+        deliveredViaSms: smsResult.delivered,
+        smsProviderConfigured: smsConfigured,
+        expiresAt,
+        sandboxOtp: !smsResult.delivered && req.body?.sandboxTest ? otpCode : undefined,
+        message: smsResult.delivered
+          ? `6-digit SMS OTP sent to +91 ${cleanPhone}. Valid for 5 minutes.`
+          : `Sandbox verification OTP generated for +91 ${cleanPhone} (valid for 5 minutes).`,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Verify Owner Recovery Mobile Number with 6-Digit SMS OTP
+app.post(
+  '/api/auth/recovery/phone/verify-otp',
+  authenticateToken,
+  requireOwner,
+  async (req, res) => {
+    try {
+      const rawOtp = String(req.body?.otp || '').trim();
+      if (!/^\d{6}$/.test(rawOtp)) {
+        return res.status(400).json({ error: 'Please enter a valid 6-digit OTP.' });
+      }
+
+      const db = await getDb();
+      const ownerRes = await db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1");
+      if (ownerRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Owner account not found.' });
+      }
+      const owner = ownerRes.rows[0];
+
+      const tokenRes = await db.query(
+        `SELECT * FROM account_recovery_tokens
+         WHERE user_id = $1 AND token_type = 'PHONE_VERIFY' AND used = FALSE
+         ORDER BY created_at DESC LIMIT 1`,
+        [owner.id]
+      );
+
+      if (tokenRes.rows.length === 0) {
+        return res.status(400).json({
+          error: 'No active mobile OTP request found. Please request a new OTP.',
+        });
+      }
+
+      const tokenRow = tokenRes.rows[0];
+      if (new Date(tokenRow.expires_at) < new Date()) {
+        await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [
+          tokenRow.id,
+        ]);
+        return res.status(400).json({
+          error: 'This OTP has expired (5-minute limit). Please request a new OTP.',
+        });
+      }
+
+      if (Number(tokenRow.attempts || 0) >= 5) {
+        await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [
+          tokenRow.id,
+        ]);
+        return res.status(429).json({
+          error: 'Maximum OTP verification attempts (5) exceeded. Please request a new OTP.',
+        });
+      }
+
+      if (tokenRow.token_hash !== sha256Hash(rawOtp)) {
+        const nextAttempts = Number(tokenRow.attempts || 0) + 1;
+        await db.query(
+          'UPDATE account_recovery_tokens SET attempts = $1, used = CASE WHEN $1 >= 5 THEN TRUE ELSE used END WHERE id = $2',
+          [nextAttempts, tokenRow.id]
+        );
+        return res.status(400).json({
+          error: `Incorrect OTP code. ${Math.max(0, 5 - nextAttempts)} attempt(s) remaining.`,
+        });
+      }
+
+      const verifiedPhone = tokenRow.target_value || owner.recovery_phone;
+      await db.query(
+        `UPDATE users SET recovery_phone = $1, phone_verified = TRUE, pending_phone = '' WHERE id = $2`,
+        [verifiedPhone, owner.id]
+      );
+      await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [tokenRow.id]);
+
+      await db.query(
+        `INSERT INTO audit_logs (action_type, entity_type, entity_id, description, performed_by)
+         VALUES ('PHONE_VERIFIED', 'USER', $1, $2, $3)`,
+        [
+          String(owner.id),
+          `Verified owner recovery mobile number: ${verifiedPhone}`,
+          owner.full_name,
+        ]
+      );
+
+      res.json({
+        success: true,
+        recoveryPhone: verifiedPhone,
+        phoneVerified: true,
+        message: `Mobile number (+91 ${verifiedPhone}) verified successfully. Mobile OTP password recovery is now enabled.`,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ==========================================
+// 1C. PUBLIC FORGOT PASSWORD & OWNER ACCOUNT RECOVERY ROUTES
+// ==========================================
+
+// A. Request Password Reset Link via Verified Recovery Email (Owner-Only, No Enumeration)
+app.post('/api/auth/forgot-password/email', async (req, res) => {
+  try {
+    const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+
+    const clientIp =
+      req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
+      req.socket?.remoteAddress ||
+      'unknown';
+    const rl = checkRateLimit(`forgot_email_${clientIp}`, 5, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      return res.status(429).json({
+        error: `Too many password reset requests. Please try again in ${rl.retryAfterSec} seconds.`,
+      });
+    }
+
+    const db = await getDb();
+    const ownerRes = await db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1");
+    const owner = ownerRes.rows[0];
+
+    const genericSafeResponse = {
+      success: true,
+      message:
+        'If this email address is registered and verified for the owner account, a secure password reset link (valid for 15 minutes) has been sent.',
+    };
+
+    // Only issue a reset token if it matches the single owner account AND the owner's email is verified
+    if (
+      !owner ||
+      !owner.email_verified ||
+      !owner.recovery_email ||
+      owner.recovery_email.trim().toLowerCase() !== cleanEmail
+    ) {
+      return res.json(genericSafeResponse);
+    }
+
+    // Check 60-second resend cooldown for active email reset token
+    const recentRes = await db.query(
+      `SELECT created_at FROM account_recovery_tokens
+       WHERE user_id = $1 AND token_type = 'PASSWORD_RESET_EMAIL' AND used = FALSE
+       ORDER BY created_at DESC LIMIT 1`,
+      [owner.id]
+    );
+    if (recentRes.rows.length > 0) {
+      const elapsedSec = Math.floor(
+        (Date.now() - new Date(recentRes.rows[0].created_at).getTime()) / 1000
+      );
+      if (elapsedSec < 30 && !req.body?.forceResend) {
+        return res.json(genericSafeResponse);
+      }
+    }
+
+    // Invalidate all previous unused PASSWORD_RESET_EMAIL tokens
+    await db.query(
+      "UPDATE account_recovery_tokens SET used = TRUE WHERE user_id = $1 AND token_type = 'PASSWORD_RESET_EMAIL' AND used = FALSE",
+      [owner.id]
+    );
+
+    const rawResetToken = generateSecureHexToken(32);
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
+
+    await db.query(
+      `INSERT INTO account_recovery_tokens (user_id, token_hash, token_type, target_value, expires_at)
+       VALUES ($1, $2, 'PASSWORD_RESET_EMAIL', $3, $4)`,
+      [owner.id, sha256Hash(rawResetToken), cleanEmail, expiresAt]
+    );
+
+    const origin =
+      req.headers.origin ||
+      (req.headers.host ? `${req.protocol || 'https'}://${req.headers.host}` : 'https://vestas-billing.vercel.app');
+    const resetLink = `${origin}/?reset_token=${rawResetToken}`;
+
+    await dispatchOwnerEmail({
+      to: cleanEmail,
+      subject: 'Password Reset Request — Vestas Pharmaceuticals Owner Account',
+      html: `
+        <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:16px;">
+          <h2 style="color:#0f172a;margin-top:0;">Vestas Pharmaceuticals — Password Reset</h2>
+          <p style="color:#334155;font-size:14px;">A password reset was requested for your Proprietor / Owner account (<strong>@${owner.username}</strong>).</p>
+          <p style="margin:20px 0;"><a href="${resetLink}" style="background:#0284c7;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:bold;display:inline-block;">Reset Owner Password</a></p>
+          <p style="color:#64748b;font-size:12px;">This single-use link expires in 15 minutes. If you did not request this, you can safely ignore this email.</p>
+        </div>
+      `,
+      text: `Vestas Pharmaceuticals Owner Password Reset\nClick to reset your password (expires in 15 minutes): ${resetLink}`,
+    });
+
+    await db.query(
+      `INSERT INTO audit_logs (action_type, entity_type, entity_id, description, performed_by)
+       VALUES ('PASSWORD_RESET_REQUESTED', 'USER', $1, $2, $3)`,
+      [
+        String(owner.id),
+        `Password reset link requested via verified recovery email (${cleanEmail})`,
+        'Owner Recovery Flow',
+      ]
+    );
+
+    return res.json(genericSafeResponse);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Validate a Password Reset Token before showing the New Password form
+app.get('/api/auth/forgot-password/validate-token', async (req, res) => {
+  try {
+    const rawToken = String(req.query?.token || '').trim();
+    if (!rawToken) {
+      return res.status(400).json({ valid: false, error: 'Reset token is missing.' });
+    }
+
+    const db = await getDb();
+    const tokenHash = sha256Hash(rawToken);
+    const result = await db.query(
+      `SELECT t.*, u.username, u.role
+       FROM account_recovery_tokens t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.token_hash = $1
+         AND t.token_type IN ('PASSWORD_RESET_EMAIL', 'PASSWORD_RESET_SESSION')
+         AND u.role = 'owner'
+       LIMIT 1`,
+      [tokenHash]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({
+        valid: false,
+        error: 'This password reset link is invalid.',
+      });
+    }
+
+    const tokenRow = result.rows[0];
+    if (tokenRow.used) {
+      return res.status(400).json({
+        valid: false,
+        error: 'This password reset link has already been used.',
+      });
+    }
+
+    if (new Date(tokenRow.expires_at) < new Date()) {
+      await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [tokenRow.id]);
+      return res.status(400).json({
+        valid: false,
+        error: 'This password reset link has expired. Please request a new reset link.',
+      });
+    }
+
+    res.json({
+      valid: true,
+      expiresAt: tokenRow.expires_at,
+    });
+  } catch (err) {
+    res.status(500).json({ valid: false, error: err.message });
+  }
+});
+
+// B1. Request Password Reset OTP via Verified Mobile Number (Owner-Only, No Enumeration)
+app.post('/api/auth/forgot-password/mobile/send-otp', async (req, res) => {
+  try {
+    const cleanPhone = normalizePhone(req.body?.phone || '');
+    if (cleanPhone.length < 10 || cleanPhone.length > 15) {
+      return res.status(400).json({ error: 'Please enter a valid 10-digit mobile number.' });
+    }
+
+    const clientIp =
+      req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
+      req.socket?.remoteAddress ||
+      'unknown';
+    const rl = checkRateLimit(`forgot_sms_${clientIp}`, 5, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      return res.status(429).json({
+        error: `Too many OTP requests. Please wait ${rl.retryAfterSec} seconds before trying again.`,
+      });
+    }
+    if (rl.secondsSinceLast < 60 && !req.body?.forceResend) {
+      return res.status(429).json({
+        error: `Please wait ${60 - rl.secondsSinceLast} seconds before requesting another OTP.`,
+        cooldownRemainingSec: 60 - rl.secondsSinceLast,
+      });
+    }
+
+    if (!isSmsProviderConfigured() && !req.body?.sandboxTest) {
+      return res.status(400).json({
+        error:
+          'SMS OTP delivery requires an SMS provider (Twilio or Fast2SMS) to be configured in server environment variables. Please use Email Recovery or configure TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER (or FAST2SMS_API_KEY).',
+        smsProviderConfigured: false,
+      });
+    }
+
+    const db = await getDb();
+    const ownerRes = await db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1");
+    const owner = ownerRes.rows[0];
+
+    const genericSafeResponse = {
+      success: true,
+      cooldownSeconds: 60,
+      message:
+        'If this mobile number is registered and verified for the owner account, a 6-digit SMS OTP (valid for 5 minutes) has been sent.',
+    };
+
+    if (
+      !owner ||
+      !owner.phone_verified ||
+      !owner.recovery_phone ||
+      normalizePhone(owner.recovery_phone) !== cleanPhone
+    ) {
+      return res.json(genericSafeResponse);
+    }
+
+    await db.query(
+      "UPDATE account_recovery_tokens SET used = TRUE WHERE user_id = $1 AND token_type = 'PASSWORD_RESET_SMS' AND used = FALSE",
+      [owner.id]
+    );
+
+    const otpCode = generateSixDigitOtp();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutes
+
+    await db.query(
+      `INSERT INTO account_recovery_tokens (user_id, token_hash, token_type, target_value, expires_at)
+       VALUES ($1, $2, 'PASSWORD_RESET_SMS', $3, $4)`,
+      [owner.id, sha256Hash(otpCode), cleanPhone, expiresAt]
+    );
+
+    await dispatchOwnerSms({
+      to: cleanPhone,
+      otp: otpCode,
+      message: `Vestas Pharmaceuticals Owner Password Reset OTP: ${otpCode}. Valid for 5 minutes. Do not share this code with anyone.`,
+    });
+
+    await db.query(
+      `INSERT INTO audit_logs (action_type, entity_type, entity_id, description, performed_by)
+       VALUES ('SMS_RESET_OTP_REQUESTED', 'USER', $1, $2, $3)`,
+      [
+        String(owner.id),
+        'Password reset SMS OTP requested for verified owner mobile number',
+        'Owner Recovery Flow',
+      ]
+    );
+
+    return res.json(genericSafeResponse);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// B2. Verify Mobile Password Reset OTP on the Server & Issue Single-Use Reset Token
+app.post('/api/auth/forgot-password/mobile/verify-otp', async (req, res) => {
+  try {
+    const cleanPhone = normalizePhone(req.body?.phone || '');
+    const rawOtp = String(req.body?.otp || '').trim();
+    if (!cleanPhone || !/^\d{6}$/.test(rawOtp)) {
+      return res.status(400).json({ error: 'Valid mobile number and 6-digit OTP are required.' });
+    }
+
+    const clientIp =
+      req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
+      req.socket?.remoteAddress ||
+      'unknown';
+    const rl = checkRateLimit(`verify_forgot_sms_${clientIp}`, 10, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      return res.status(429).json({
+        error: `Too many OTP verification attempts. Please try again in ${rl.retryAfterSec} seconds.`,
+      });
+    }
+
+    const db = await getDb();
+    const ownerRes = await db.query("SELECT * FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1");
+    const owner = ownerRes.rows[0];
+
+    if (
+      !owner ||
+      !owner.phone_verified ||
+      !owner.recovery_phone ||
+      normalizePhone(owner.recovery_phone) !== cleanPhone
+    ) {
+      return res.status(400).json({ error: 'Invalid or expired OTP code.' });
+    }
+
+    const tokenRes = await db.query(
+      `SELECT * FROM account_recovery_tokens
+       WHERE user_id = $1 AND token_type = 'PASSWORD_RESET_SMS' AND used = FALSE
+       ORDER BY created_at DESC LIMIT 1`,
+      [owner.id]
+    );
+
+    if (tokenRes.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired OTP code.' });
+    }
+
+    const tokenRow = tokenRes.rows[0];
+    if (new Date(tokenRow.expires_at) < new Date()) {
+      await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [tokenRow.id]);
+      return res.status(400).json({
+        error: 'This OTP has expired (5-minute limit). Please request a new OTP.',
+      });
+    }
+
+    if (Number(tokenRow.attempts || 0) >= 5) {
+      await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [tokenRow.id]);
+      return res.status(429).json({
+        error: 'Maximum OTP attempts exceeded. Please request a new OTP.',
+      });
+    }
+
+    if (tokenRow.token_hash !== sha256Hash(rawOtp)) {
+      const nextAttempts = Number(tokenRow.attempts || 0) + 1;
+      await db.query(
+        'UPDATE account_recovery_tokens SET attempts = $1, used = CASE WHEN $1 >= 5 THEN TRUE ELSE used END WHERE id = $2',
+        [nextAttempts, tokenRow.id]
+      );
+      if (nextAttempts >= 5) {
+        return res.status(429).json({
+          error: 'Maximum OTP attempts exceeded. Please request a new OTP.',
+        });
+      }
+      return res.status(400).json({
+        error: `Invalid OTP code. ${Math.max(0, 5 - nextAttempts)} attempt(s) remaining.`,
+      });
+    }
+
+    // Valid OTP: mark SMS OTP used and create a single-use 10-minute PASSWORD_RESET_SESSION token
+    await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [tokenRow.id]);
+
+    const resetSessionToken = generateSecureHexToken(32);
+    const sessionExpiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    await db.query(
+      `INSERT INTO account_recovery_tokens (user_id, token_hash, token_type, target_value, expires_at)
+       VALUES ($1, $2, 'PASSWORD_RESET_SESSION', $3, $4)`,
+      [owner.id, sha256Hash(resetSessionToken), cleanPhone, sessionExpiresAt]
+    );
+
+    res.json({
+      verified: true,
+      resetToken: resetSessionToken,
+      expiresAt: sessionExpiresAt,
+      message: 'OTP verified successfully. You may now set a new owner password.',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Complete Owner Password Reset (Using Validated Email Reset Token or Mobile OTP Reset Session Token)
+app.post('/api/auth/forgot-password/reset', async (req, res) => {
+  try {
+    const { token, newPassword, confirmPassword } = req.body || {};
+    const rawToken = String(token || '').trim();
+    if (!rawToken) {
+      return res.status(400).json({ error: 'Password reset token is required.' });
+    }
+    if (!newPassword || String(newPassword).trim().length < 6) {
+      return res.status(400).json({
+        error: 'New password must be at least 6 characters long.',
+      });
+    }
+    if (confirmPassword !== undefined && newPassword !== confirmPassword) {
+      return res.status(400).json({
+        error: 'New password and confirm password do not match.',
+      });
+    }
+
+    const db = await getDb();
+    const tokenHash = sha256Hash(rawToken);
+    const tokenRes = await db.query(
+      `SELECT t.*, u.username, u.full_name, u.role, u.token_version
+       FROM account_recovery_tokens t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.token_hash = $1
+         AND t.token_type IN ('PASSWORD_RESET_EMAIL', 'PASSWORD_RESET_SESSION')
+         AND u.role = 'owner'
+       LIMIT 1`,
+      [tokenHash]
+    );
+
+    if (tokenRes.rows.length === 0) {
+      return res.status(400).json({
+        error: 'Invalid password reset token. Please request a new password reset.',
+      });
+    }
+
+    const tokenRow = tokenRes.rows[0];
+    if (tokenRow.used) {
+      return res.status(400).json({
+        error: 'This password reset link/token has already been used.',
+      });
+    }
+
+    if (new Date(tokenRow.expires_at) < new Date()) {
+      await db.query('UPDATE account_recovery_tokens SET used = TRUE WHERE id = $1', [tokenRow.id]);
+      return res.status(400).json({
+        error: 'This password reset token has expired. Please request a new reset link or OTP.',
+      });
+    }
+
+    const newHash = await bcrypt.hash(String(newPassword).trim(), 10);
+    const nextTokenVersion = Number(tokenRow.token_version || 1) + 1;
+
+    // 1. Update owner password hash & increment token_version to invalidate all existing JWT sessions
+    await db.query(
+      "UPDATE users SET password_hash = $1, token_version = $2 WHERE id = $3 AND role = 'owner'",
+      [newHash, nextTokenVersion, tokenRow.user_id]
+    );
+    minValidOwnerTokenVersion = nextTokenVersion;
+
+    // 2. Mark this reset token (and any other pending reset tokens for this user) as used
+    await db.query(
+      "UPDATE account_recovery_tokens SET used = TRUE WHERE user_id = $1 AND token_type IN ('PASSWORD_RESET_EMAIL', 'PASSWORD_RESET_SMS', 'PASSWORD_RESET_SESSION')",
+      [tokenRow.user_id]
+    );
+
+    // 3. Log security audit trail
+    await db.query(
+      `INSERT INTO audit_logs (action_type, entity_type, entity_id, description, performed_by)
+       VALUES ('OWNER_PASSWORD_RESET', 'USER', $1, $2, $3)`,
+      [
+        String(tokenRow.user_id),
+        `Owner password successfully reset via ${
+          tokenRow.token_type === 'PASSWORD_RESET_EMAIL' ? 'verified recovery email link' : 'verified mobile SMS OTP'
+        }. All prior sessions invalidated.`,
+        tokenRow.full_name || 'Owner',
+      ]
+    );
+
+    res.json({
+      success: true,
+      message:
+        'Your owner password has been reset successfully. All previous sessions have been signed out. You can now sign in with your new password.',
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
