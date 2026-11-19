@@ -17,6 +17,8 @@ import {
   CheckCircle2,
   ArrowLeft,
   Clock,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { VestasLogo } from './InvoiceModal';
 import { apiRequest, setAuthToken } from '../utils/api';
@@ -31,7 +33,8 @@ export default function LoginView({
 }) {
   const [roleTab, setRoleTab] = useState('owner'); // 'owner' | 'worker'
   const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState('vestas123');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successBanner, setSuccessBanner] = useState('');
@@ -119,10 +122,10 @@ export default function LoginView({
     setSuccessBanner('');
     if (role === 'owner') {
       setUsername('admin');
-      setPassword('');
+      setPassword('vestas123');
     } else {
       setUsername('staff');
-      setPassword('');
+      setPassword('staff123');
     }
   };
 
@@ -454,7 +457,7 @@ export default function LoginView({
 
             {/* VIEW 1: STANDARD LOGIN FORM */}
             {viewMode === 'login' && (
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
                     {roleTab === 'owner' ? 'Owner Username' : 'Staff Username'}
@@ -462,6 +465,9 @@ export default function LoginView({
                   <div className="relative">
                     <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
+                      key={`user-${roleTab}`}
+                      name={roleTab === 'owner' ? 'vestas_owner_user' : 'vestas_staff_user'}
+                      autoComplete="off"
                       type="text"
                       required
                       value={username}
@@ -481,13 +487,24 @@ export default function LoginView({
                   <div className="relative">
                     <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
-                      type="password"
+                      key={`pass-${roleTab}`}
+                      name={roleTab === 'owner' ? 'vestas_owner_pass' : 'vestas_staff_pass'}
+                      autoComplete="new-password"
+                      type={showPassword ? 'text' : 'password'}
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-sky-600 focus:ring-2 focus:ring-sky-100 outline-none transition"
+                      className="w-full pl-10 pr-10 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-sky-600 focus:ring-2 focus:ring-sky-100 outline-none transition"
                       placeholder="Enter password"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+                      title={showPassword ? 'Hide Password' : 'Show Password'}
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
                   {roleTab === 'owner' && (
                     <div className="mt-2 flex justify-end">

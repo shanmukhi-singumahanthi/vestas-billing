@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vestas-pharma-offline-v3';
+const CACHE_NAME = 'vestas-pharma-offline-v4';
 const CORE_ASSETS = [
   '/',
   '/index.html',
